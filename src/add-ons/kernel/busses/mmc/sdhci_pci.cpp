@@ -18,7 +18,7 @@
 #include "sdhci_pci.h"
 
 
-#define TRACE_SDHCI
+#define TRACE_SDHCI 1
 #ifdef TRACE_SDHCI
 #	define TRACE(x...) dprintf("\33[33msdhci_pci:\33[0m " x)
 #else
@@ -39,7 +39,7 @@
 
 class SdhciBus {
 	public:
-							SdhciBus(struct registers* registers, uint8_t irq);
+							SdhciBus(uint8_t slot, struct registers* registers, uint8_t irq);
 							~SdhciBus();
 
 		void				EnableInterrupts(uint32_t mask);
@@ -49,17 +49,20 @@ class SdhciBus {
 		status_t			InitCheck();
 		void				Reset();
 		void				SetClock(int kilohertz);
-
+		status_t			ReadNaive(off_t pos, void* buffer, size_t* _length);
+		
 	private:
 		void				DumpRegisters(uint8_t slot);
 		bool				PowerOn();
 		void				RecoverError();
 
 	private:
+		uint8_t				fSlot;
 		struct registers*	fRegisters;
 		uint32_t			fCommandResult;
 		uint8_t				fIrq;
 		sem_id				fSemaphore;
+		sem_id				fSemRead;
 		status_t			fStatus;
 };
 
@@ -77,11 +80,13 @@ sdhci_generic_interrupt(void* data)
 }
 
 
-SdhciBus::SdhciBus(struct registers* registers, uint8_t irq)
+SdhciBus::SdhciBus(uint8_t slot, struct registers* registers, uint8_t irq)
 	:
+	fSlot(slot),
 	fRegisters(registers),
 	fIrq(irq),
-	fSemaphore(0)
+	fSemaphore(0),
+	fSemRead(0)
 {
 	if (irq == 0 || irq == 0xff) {
 		ERROR("PCI IRQ not assigned\n");
@@ -90,7 +95,8 @@ SdhciBus::SdhciBus(struct registers* registers, uint8_t irq)
 	}
 
 	fSemaphore = create_sem(0, "SDHCI interrupts");
-
+	fSemRead   = create_sem(0, "SDHCI buffer read");
+	
 	fStatus = install_io_interrupt_handler(fIrq,
 		sdhci_generic_interrupt, this, 0);
 
@@ -148,7 +154,7 @@ SdhciBus::DumpRegisters(uint8_t slot)
 	TRACE("%d blocks of size %d\n", fRegisters->block_count,
 		fRegisters->block_size);
 	TRACE("argument: %x\n", fRegisters->argument);
-	TRACE("transfer_mode: %d\n", fRegisters->transfer_mode);
+	TRACE("transfer_mode: %x\n", fRegisters->transfer_mode.Bits());
 	TRACE("command: %x\n", fRegisters->command.Bits());
 	TRACE("response:");
 	for (int i = 0; i < 4; i++)
@@ -185,7 +191,7 @@ SdhciBus::EnableInterrupts(uint32_t mask)
 	fRegisters->interrupt_signal_enable = mask;
 }
 
-
+// #pragma mark -
 status_t
 SdhciBus::ExecuteCommand(uint8_t command, uint32_t argument, uint32_t* response)
 {
@@ -200,14 +206,14 @@ SdhciBus::ExecuteCommand(uint8_t command, uint32_t argument, uint32_t* response)
 	uint32_t replyType;
 
 	switch(command) {
-		case 0:
+		case GO_IDLE_STATE:
 			replyType = Command::kNoReplyType;
 			break;
-		case 55:
+		case APP_CMD:
 			replyType = Command::kR1Type;
 			break;
-		case 2:
-		case 9:
+		case ALL_SEND_CID:
+		case SEND_CSD:
 			replyType = Command::kR2Type;
 			break;
 		case 41: // ACMD
@@ -218,6 +224,9 @@ SdhciBus::ExecuteCommand(uint8_t command, uint32_t argument, uint32_t* response)
 			break;
 		case 8:
 			replyType = Command::kR7Type;
+			break;
+		case READ_SINGLE_BLOCK:
+			replyType = Command::kR1Type;
 			break;
 		default:
 			ERROR("Unknown command\n");
@@ -241,6 +250,14 @@ SdhciBus::ExecuteCommand(uint8_t command, uint32_t argument, uint32_t* response)
 		// TODO look at errors in interrupt_status register for more details
 		// and return a more appropriate error code
 		return B_ERROR;
+	}
+	//14) wait for buffer read ready interrupt (the wait is done through the semaphore fSemaphore)
+	if (fCommandResult & SDHCI_INT_BUF_READ_READY) {
+		//15) clear the "buffer read ready" interrupt  bit
+		fRegisters->interrupt_status |= SDHCI_INT_BUF_READ_READY;
+		//15) read block data from Buffer Data Port register
+		release_sem(fSemRead);	
+
 	}
 
 	if (fRegisters->present_state.CommandInhibit()) {
@@ -324,6 +341,50 @@ SdhciBus::SetClock(int kilohertz)
 	fRegisters->clock_control.EnableSD();
 }
 
+// #pragma mark -
+status_t SdhciBus::ReadNaive(off_t pos, void* buffer, size_t* _length) {
+	//1) Set block size reg	
+	fRegisters->block_size = 512;
+	
+	//2) Set block count
+	fRegisters->block_count = 1;
+	
+	//3) Set argument register
+	// not needed, it will be passed through the argument parameter of 
+	//ExecuteCommand
+	
+	//4) Set transfer mode
+	fRegisters->transfer_mode.SetMultiSingleBlockSelect(TransferMode::kSingle);
+	fRegisters->transfer_mode.SetDataTransferDirectionSelect(TransferMode::kRead);
+	//Not needed since Multi/Single Block Select is 0
+	//fRegisters->transfer_mode.SetBlockCountEnable(false); 
+	fRegisters->transfer_mode.SetAutoCmdEnable(TransferMode::kAutoCmdDisabled);
+	fRegisters->transfer_mode.SetDmaEnable(TransferMode::kNoDmaOrNoData);
+	//Response Error Check by Host Controller not useful yet, maybe for ADMA3 to speed up.
+	fRegisters->transfer_mode.SetResponseErrorCheckEnable(false ); 
+	if (fRegisters->transfer_mode.IsResponseErrorCheckEnable()) {
+		fRegisters->transfer_mode.SetResponseInterruptDisable(true);
+		fRegisters->transfer_mode.SetResponseTypeR1R5(TransferMode::kR1);//Memory
+	}
+	
+	//5) Set the value to Command register
+	//6) Wait for Command Complete interrupt (as "response check enable" is false, no need to go to stop
+	//7) Write 1 to Command Complete register
+	//8) Read Response register
+	uint32_t response;
+	ExecuteCommand(READ_SINGLE_BLOCK, pos, &response);
+	
+	//15) read block data from Buffer Data Port register
+	acquire_sem(fSemRead);
+	size_t to_read = *_length;
+	size_t read = 0;
+	while(to_read > 0) {
+		TRACE("read : 0x%x", fRegisters->buffer_data_port);
+		read++;
+	}
+	*_length = read;
+	return B_OK;	
+}
 
 static void
 sdhci_stop_clock(struct registers* regs)
@@ -421,7 +482,7 @@ init_bus(device_node* node, void** bus_cookie)
 	uint8_t irq = pciInfo.u.h0.interrupt_line;
 	TRACE("irq interrupt line: %d\n", irq);
 
-	SdhciBus* bus = new(std::nothrow) SdhciBus(_regs, irq);
+	SdhciBus* bus = new(std::nothrow) SdhciBus(slot, _regs, irq);
 
 	status_t status = B_NO_MEMORY;
 	if (bus != NULL)
@@ -471,7 +532,7 @@ SdhciBus::RecoverError()
 	fRegisters->interrupt_status &= ~(error_status);
 }
 
-
+// #pragma mark -
 int32
 SdhciBus::HandleInterrupt()
 {
@@ -485,7 +546,10 @@ SdhciBus::HandleInterrupt()
 
 	// FIXME use the global "slot interrupt" register to quickly decide if an
 	// interrupt is targetted to this slot
-
+	if ( !(fRegisters->slot_interrupt_status & (1 << fSlot)) ) {
+		return B_UNHANDLED_INTERRUPT;
+	}
+	
 	// handling card presence interrupt
 	if (intmask & (SDHCI_INT_CARD_INS | SDHCI_INT_CARD_REM)) {
 		uint32_t card_present = ((intmask & SDHCI_INT_CARD_INS) != 0);
@@ -530,9 +594,10 @@ SdhciBus::HandleInterrupt()
 	if (intmask != 0) {
 		ERROR("Remaining interrupts at end of handler: %x\n", intmask);
 	}
-
+	
 	return B_UNHANDLED_INTERRUPT;
 }
+// #pragma mark -
 
 
 static void
@@ -665,6 +730,19 @@ execute_command(void* controller, uint8_t command, uint32_t argument,
 }
 
 
+//Very naive read protocol : non DMA, 32 bits at a time (size of Buffer Data Port)
+static status_t 
+read_naive(void* controller, off_t pos, void* buffer, size_t* _length) 
+{
+	CALLED();
+	TRACE("read_native : truncate to first 512 bytes");
+	
+	SdhciBus* bus = (SdhciBus*)controller;
+	off_t pos_0 = 0;
+	*_length=512;
+	return bus->ReadNaive(pos_0, buffer, _length);
+	
+}
 module_dependency module_dependencies[] = {
 	{ MMC_BUS_MODULE_NAME, (module_info**)&gMMCBusController},
 	{ B_DEVICE_MANAGER_MODULE_NAME, (module_info**)&gDeviceManager },
@@ -692,6 +770,7 @@ static mmc_bus_interface gSDHCIPCIDeviceModule = {
 
 	set_clock,
 	execute_command,
+	read_naive
 };
 
 

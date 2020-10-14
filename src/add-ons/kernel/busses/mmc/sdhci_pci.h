@@ -19,6 +19,106 @@
 
 #define SDHCI_BUS_TYPE_NAME 							"bus/sdhci/v1"
 
+class TransferMode {
+		
+		
+	public:
+		uint16_t Bits() { return fBits; }
+		
+		#define RESPONSE_INTERRUPT_DISABLE (1 << 8)
+		void SetResponseInterruptDisable(bool value)
+		{
+			if (value) 
+				fBits |= RESPONSE_INTERRUPT_DISABLE;
+			else
+				fBits &= ~ RESPONSE_INTERRUPT_DISABLE;
+		}
+				
+		#define RESPONSE_ERROR_CHECK_ENABLE (1 << 7)
+		void SetResponseErrorCheckEnable(bool value)
+		{
+			if (value)
+				fBits |= RESPONSE_ERROR_CHECK_ENABLE;
+			else
+				fBits &= ~ RESPONSE_ERROR_CHECK_ENABLE;
+		}
+		bool IsResponseErrorCheckEnable()
+		{
+			return fBits & RESPONSE_ERROR_CHECK_ENABLE;
+		}
+		
+		#define RESPONSE_TYPE_R1_R5 (1 << 6)
+		void SetResponseTypeR1R5(uint8_t value)
+		{
+			if (value == kR1) 
+				fBits &= ~ RESPONSE_TYPE_R1_R5;
+			else if (value == kR5)
+				fBits |= RESPONSE_TYPE_R1_R5; 
+		}
+		
+		#define MULTI_SINGLE_BLOCK_SELECT (1 << 5)
+		void SetMultiSingleBlockSelect(uint8_t value) 
+		{
+			if (value) 
+				fBits |= MULTI_SINGLE_BLOCK_SELECT;
+			else
+				fBits &= ~ MULTI_SINGLE_BLOCK_SELECT;
+		}
+		
+		#define DATA_TRANSFER_DIRECTION_SELECT ( 1 << 4 )
+		void SetDataTransferDirectionSelect(uint8_t value) 
+		{
+			if (value) 
+				fBits |= DATA_TRANSFER_DIRECTION_SELECT;
+			else
+				fBits &= ~ DATA_TRANSFER_DIRECTION_SELECT;
+		}
+		
+		#define AUTO_CMD_12 ( 1 << 2 )
+		#define AUTO_CMD_23 ( 1 << 3 )
+		void SetAutoCmdEnable(uint8_t value) 
+		{
+			if (value == kAutoCmdDisabled) {
+				fBits &= ~ AUTO_CMD_12;
+				fBits &= ~ AUTO_CMD_23;
+			} else if (value == kAutoCmd12Enable) {
+				fBits |= AUTO_CMD_12;
+				fBits &= ~ AUTO_CMD_23;
+			} else if (value == kAutoCmd23Enable) {
+				fBits &= ~ AUTO_CMD_12;
+				fBits |= AUTO_CMD_23;
+			} else if (value == kAutoCmdAutoSelect) {
+				fBits |= AUTO_CMD_12;
+				fBits |= AUTO_CMD_23;
+			} 
+		}
+		
+		#define DMA_ENABLE (1 << 0 )
+		static const uint8_t kAutoCmdDisabled = 0;
+		static const uint8_t kAutoCmd12Enable = 1 << 0;
+		static const uint8_t kAutoCmd23Enable = 1 << 1;
+		static const uint8_t kAutoCmdAutoSelect = 
+			kAutoCmd23Enable | kAutoCmd12Enable;
+		void SetDmaEnable(uint8_t value) 
+		{
+			if (value == kDmaEnable)
+				fBits |= DMA_ENABLE;
+			else
+				fBits &= ~DMA_ENABLE;	
+		}
+		
+		static const uint8_t kMulti = 1;
+		static const uint8_t kSingle = 0;
+		static const uint8_t kRead = 1;
+		static const uint8_t kWrite = 0;
+		static const uint8_t kDmaEnable = 1;
+		static const uint8_t kNoDmaOrNoData = 0;
+		static const uint8_t kR1 = 0;
+		static const uint8_t kR5 = 1;
+		
+	private:
+		volatile uint16_t fBits;
+} __attribute__((packed));
 
 class Command {
 	public:
@@ -134,24 +234,25 @@ class SoftwareReset {
 } __attribute__((packed));
 
 
-/* Interrupt registers */
-#define SDHCI_INT_CMD_CMP		0x00000001 		// command complete enable
-#define SDHCI_INT_TRANS_CMP		0x00000002		// transfer complete enable
-#define SDHCI_INT_CARD_INS 		0x00000040 		// card insertion enable
-#define SDHCI_INT_CARD_REM 		0x00000080 		// card removal enable
-#define SDHCI_INT_ERROR         0x00008000      // error
-#define SDHCI_INT_TIMEOUT		0x00010000 		// Timeout error
-#define SDHCI_INT_CRC			0x00020000 		// CRC error
-#define SDHCI_INT_END_BIT		0x00040000 		// end bit error
-#define SDHCI_INT_INDEX 		0x00080000		// index error
-#define SDHCI_INT_BUS_POWER		0x00800000 		// power fail
+// #pragma mark Interrupt registers 
+#define SDHCI_INT_CMD_CMP			0x00000001	// command complete enable
+#define SDHCI_INT_TRANS_CMP			0x00000002	// transfer complete enable
+#define SDHCI_INT_BUF_READ_READY	0x00000020  // buffer read ready enable
+#define SDHCI_INT_CARD_INS 			0x00000040	// card insertion enable
+#define SDHCI_INT_CARD_REM 			0x00000080	// card removal enable
+#define SDHCI_INT_ERROR         	0x00008000	// error
+#define SDHCI_INT_TIMEOUT			0x00010000	// Timeout error
+#define SDHCI_INT_CRC				0x00020000	// CRC error
+#define SDHCI_INT_END_BIT			0x00040000	// end bit error
+#define SDHCI_INT_INDEX 			0x00080000	// index error
+#define SDHCI_INT_BUS_POWER			0x00800000	// power fail
 
 #define	 SDHCI_INT_CMD_ERROR_MASK	(SDHCI_INT_TIMEOUT | \
 		SDHCI_INT_CRC | SDHCI_INT_END_BIT | SDHCI_INT_INDEX)
 
 #define SDHCI_INT_CMD_MASK 	(SDHCI_INT_CMD_CMP | SDHCI_INT_CMD_ERROR_MASK)
 
-
+// #pragma mark -
 class Capabilities
 {
 	public:
@@ -175,14 +276,14 @@ class HostControllerVersion {
 		const uint8_t vendorVersion;
 } __attribute__((packed));
 
-
+// #pragma mark -
 struct registers {
 	// SD command generation
 	volatile uint32_t system_address;
 	volatile uint16_t block_size;
 	volatile uint16_t block_count;
 	volatile uint32_t argument;
-	volatile uint16_t transfer_mode;
+	TransferMode transfer_mode;
 	Command command;
 
 	// Response

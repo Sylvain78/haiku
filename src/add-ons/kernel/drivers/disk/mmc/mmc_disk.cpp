@@ -188,7 +188,6 @@ mmc_block_uninit_device(void* _cookie)
 	// TODO cleanup whatever is relevant
 }
 
-
 static status_t
 mmc_block_open(void* _info, const char* path, int openMode, void** _cookie)
 {
@@ -227,13 +226,21 @@ mmc_block_free(void* cookie)
 	return B_OK;
 }
 
+static status_t 
+mmc_block_read(void* cookie, off_t pos, void* buffer, size_t* _length)
+{
+	CALLED();
+	mmc_disk_handle* handle = (mmc_disk_handle*)cookie;
+	TRACE("Ready to execute %p\n", handle->info->mmc->read_naive);
+	return handle->info->mmc->read_naive(handle->info->parent, pos, buffer, _length);
+}
 
 static status_t
 mmc_block_get_geometry(mmc_disk_handle* handle, device_geometry* geometry)
 {
 	struct mmc_disk_csd csd;
 	TRACE("Ready to execute %p\n", handle->info->mmc->execute_command);
-	handle->info->mmc->execute_command(handle->info->parent, 9,
+	handle->info->mmc->execute_command(handle->info->parent, SEND_CSD,
 		handle->info->rca << 16, (uint32_t*)&csd);
 
 	TRACE("CSD: %lx %lx\n", csd.bits[0], csd.bits[1]);
@@ -351,7 +358,7 @@ struct device_module_info sMMCBlockDevice = {
 	mmc_block_open,
 	mmc_block_close,
 	mmc_block_free,
-	NULL, //mmc_block_read,
+	mmc_block_read,
 	NULL, //mmc_block_write,
 	NULL, //mmc_block_io,
 	mmc_block_ioctl,
