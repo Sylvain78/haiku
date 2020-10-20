@@ -26,18 +26,23 @@ enum {
 
 
 enum SDHCI_COMMANDS {
-	//Basic commands, class 0
-	GO_IDLE_STATE = 0,
-	ALL_SEND_CID = 2,
-	SEND_RELATIVE_ADDR = 3,
-	SEND_IF_COND = 8,
-	SEND_CSD = 9,
+	// Basic commands, class 0
+	GO_IDLE_STATE 			= 0,
+	ALL_SEND_CID			= 2,
+	SEND_RELATIVE_ADDR		= 3,
+	SELECT_DESELECT_CARD	= 7,
+	SEND_IF_COND			= 8,
+	SEND_CSD				= 9,
+	STOP_TRANSMISSION		= 12,
 	
-	//Block oriented read commands, class 2
+	// Block oriented read commands, class 2
 	READ_SINGLE_BLOCK = 17,
 	
-	//Application specific commands, class 8
+	// Application specific commands, class 8
 	APP_CMD = 55,
+	
+	// I/O mode commands, class 9
+	IO_ABORT = 52,
 };
 
 enum SDHCI_APPLICATION_COMMANDS {
@@ -63,7 +68,7 @@ typedef struct mmc_bus_interface {
 	status_t (*set_clock)(void* controller, uint32_t kilohertz);
 	status_t (*execute_command)(void* controller, uint8_t command,
 		uint32_t argument, uint32_t* result);
-	status_t (*read_naive)(void* controller, off_t pos, void* buffer, size_t* _length);
+	status_t (*read_naive)(void* controller, uint16_t rca, off_t pos, void* buffer, size_t* _length);
 } mmc_bus_interface;
 
 
@@ -72,7 +77,7 @@ typedef struct mmc_device_interface {
 	driver_module_info info;
 	status_t (*execute_command)(device_node* node, uint8_t command,
 		uint32_t argument, uint32_t* result);	
-	status_t (*read_naive)(void* controller, off_t pos, void* buffer, size_t* _length);
+	status_t (*read_naive)(void* controller, uint16_t rca, off_t pos, void* buffer, size_t* _length);
 			
 } mmc_device_interface;
 

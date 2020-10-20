@@ -20,8 +20,6 @@
 #define SDHCI_BUS_TYPE_NAME 							"bus/sdhci/v1"
 
 class TransferMode {
-		
-		
 	public:
 		uint16_t Bits() { return fBits; }
 		
@@ -93,7 +91,16 @@ class TransferMode {
 			} 
 		}
 		
-		#define DMA_ENABLE (1 << 0 )
+		#define BLOCK_COUNT_ENABLE ( 1 << 1 )
+		void SetBlockCountEnable(bool value)
+		{
+			if(value)
+				fBits |= BLOCK_COUNT_ENABLE;
+			else
+				fBits &= BLOCK_COUNT_ENABLE;
+		}
+		
+		#define DMA_ENABLE ( 1 << 0 )
 		static const uint8_t kAutoCmdDisabled = 0;
 		static const uint8_t kAutoCmd12Enable = 1 << 0;
 		static const uint8_t kAutoCmd23Enable = 1 << 1;
@@ -135,14 +142,17 @@ class Command {
 		static const uint8_t kSubCommand = 0x4;
 		static const uint8_t kReplySizeMask = 0x3;
 		static const uint8_t k32BitResponse = 0x2;
-		static const uint8_t k128BitResponse = 0x1;
+		static const uint8_t k128BitResponse = 0x1; 
+		static const uint8_t k32BitResponseCheckBusy = 0x3;
 
 		// For simplicity pre-define the standard response types from the SD
 		// card specification
 		static const uint8_t kNoReplyType = 0;
 		static const uint8_t kR1Type = kCheckIndex | kCRCEnable
 			| k32BitResponse;
-		static const uint8_t kR2Type = kCRCEnable | k128BitResponse;
+		static const uint8_t kR1bType = (kCheckIndex | kCRCEnable 
+			| k32BitResponseCheckBusy) & (~ kDataPresent);
+ 		static const uint8_t kR2Type = kCRCEnable | k128BitResponse;
 		static const uint8_t kR3Type = k32BitResponse;
 		static const uint8_t kR6Type = kCheckIndex | k32BitResponse;
 		static const uint8_t kR7Type = kDataPresent | kCheckIndex | kCRCEnable
@@ -161,7 +171,8 @@ class PresentState {
 		uint32_t Bits() { return fBits; }
 
 		bool IsCardInserted() { return fBits & (1 << 16); }
-		bool CommandInhibit() { return fBits & (1 << 0); }
+		bool CommandInhibitCMD() { return fBits & (1 << 0); }
+		bool CommandInhibitDAT() { return fBits & (1 << 1); }
 
 	private:
 		volatile uint32_t fBits;

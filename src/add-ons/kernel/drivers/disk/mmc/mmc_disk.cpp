@@ -232,7 +232,7 @@ mmc_block_read(void* cookie, off_t pos, void* buffer, size_t* _length)
 	CALLED();
 	mmc_disk_handle* handle = (mmc_disk_handle*)cookie;
 	TRACE("Ready to execute %p\n", handle->info->mmc->read_naive);
-	return handle->info->mmc->read_naive(handle->info->parent, pos, buffer, _length);
+	return handle->info->mmc->read_naive(handle->info->parent, handle->info->rca, pos, buffer, _length);
 }
 
 static status_t

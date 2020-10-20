@@ -49,7 +49,7 @@ class SdhciBus {
 		status_t			InitCheck();
 		void				Reset();
 		void				SetClock(int kilohertz);
-		status_t			ReadNaive(off_t pos, void* buffer, size_t* _length);
+		status_t			ReadNaive(uint16_t rca, off_t pos, void* buffer, size_t* _length);
 		
 	private:
 		void				DumpRegisters(uint8_t slot);
@@ -62,6 +62,7 @@ class SdhciBus {
 		uint32_t			fCommandResult;
 		uint8_t				fIrq;
 		sem_id				fSemaphore;
+		sem_id				fSemTransfer;
 		sem_id				fSemRead;
 		status_t			fStatus;
 };
@@ -86,6 +87,7 @@ SdhciBus::SdhciBus(uint8_t slot, struct registers* registers, uint8_t irq)
 	fRegisters(registers),
 	fIrq(irq),
 	fSemaphore(0),
+	fSemTransfer(0),
 	fSemRead(0)
 {
 	if (irq == 0 || irq == 0xff) {
@@ -95,6 +97,7 @@ SdhciBus::SdhciBus(uint8_t slot, struct registers* registers, uint8_t irq)
 	}
 
 	fSemaphore = create_sem(0, "SDHCI interrupts");
+	fSemTransfer = create_sem(0, "SDHCI Transfer");
 	fSemRead   = create_sem(0, "SDHCI buffer read");
 	
 	fStatus = install_io_interrupt_handler(fIrq,
@@ -123,7 +126,7 @@ SdhciBus::SdhciBus(uint8_t slot, struct registers* registers, uint8_t irq)
 	// FIXME do we need all these? Wouldn't card insertion/removal and command
 	// completion be enough?
 	EnableInterrupts(SDHCI_INT_CMD_CMP
-		| SDHCI_INT_TRANS_CMP | SDHCI_INT_CARD_INS | SDHCI_INT_CARD_REM
+		| SDHCI_INT_TRANS_CMP | SDHCI_INT_BUF_READ_READY | SDHCI_INT_CARD_INS | SDHCI_INT_CARD_REM
 		| SDHCI_INT_TIMEOUT | SDHCI_INT_CRC | SDHCI_INT_INDEX
 		| SDHCI_INT_BUS_POWER | SDHCI_INT_END_BIT);
 
@@ -135,6 +138,10 @@ SdhciBus::~SdhciBus()
 {
 	if (fSemaphore != 0)
 		delete_sem(fSemaphore);
+	if (fSemTransfer != 0)
+		delete_sem(fSemTransfer);
+	if (fSemRead != 0)
+		delete_sem(fSemRead);
 
 	EnableInterrupts(0);
 	if (fIrq != 0)
@@ -192,14 +199,26 @@ SdhciBus::EnableInterrupts(uint32_t mask)
 }
 
 // #pragma mark -
+/*
+PartA2, SD Host Controller Simplified Specification, Version 4.20
+§3.7.1.1 The sequence to issue an SD Command
+*/
 status_t
 SdhciBus::ExecuteCommand(uint8_t command, uint32_t argument, uint32_t* response)
 {
 	TRACE("ExecuteCommand(%d, %x)\n", command, argument);
-	if (fRegisters->present_state.CommandInhibit()) {
-		ERROR("Execution aborted, command inhibit\n");
-		return B_BUSY;
+	TRACE("Present state at beginning of command : %04x\n", fRegisters->present_state.Bits());
+
+	//1) Check Command Inhibit (CMD)
+	while (fRegisters->present_state.CommandInhibitCMD()) {
+		//wait for CMD line to be free
 	}
+	TRACE("CMD line free\n");
+	//TODO specification mandates looping, but maybe we should wait on a 
+	//semaphore  or do the following
+	//ERROR("Execution aborted, command inhibit (CMD)\n");
+	//	return B_BUSY;
+	
 
 	fRegisters->argument = argument;
 
@@ -209,33 +228,68 @@ SdhciBus::ExecuteCommand(uint8_t command, uint32_t argument, uint32_t* response)
 		case GO_IDLE_STATE:
 			replyType = Command::kNoReplyType;
 			break;
-		case APP_CMD:
-			replyType = Command::kR1Type;
-			break;
 		case ALL_SEND_CID:
 		case SEND_CSD:
 			replyType = Command::kR2Type;
 			break;
-		case 41: // ACMD
-			replyType = Command::kR3Type;
-			break;
-		case 3:
+		case SEND_RELATIVE_ADDR:
 			replyType = Command::kR6Type;
 			break;
-		case 8:
+		case SELECT_DESELECT_CARD:
+			replyType = Command::kR1bType;
+			break;
+		case SEND_IF_COND:
 			replyType = Command::kR7Type;
 			break;
 		case READ_SINGLE_BLOCK:
 			replyType = Command::kR1Type;
+			break;
+		case APP_CMD:
+			replyType = Command::kR1Type;
+			break;
+		case 41: // ACMD
+			replyType = Command::kR3Type;
 			break;
 		default:
 			ERROR("Unknown command\n");
 			return B_BAD_DATA;
 	}
 
+	//2) Issue the command using DAT busy ?
+	if ( (replyType & Command::k32BitResponseCheckBusy) 
+		== Command::k32BitResponseCheckBusy ) {
+		//3) Issuing Abort Command ?
+		if ( ! (command == STOP_TRANSMISSION || command == IO_ABORT)) {
+			//4) Check Command Inhibit (DAT)
+			TRACE("Before waiting the dat line to be free\n");
+			while (fRegisters->present_state.CommandInhibitDAT()) {
+				//wait for DAT line to be free
+				
+				//TODO specification mandates looping, but maybe we should wait
+				// on a semaphore or do the following :
+				//ERROR("Execution aborted, command inhibit (CMD)\n");
+				//return B_BUSY;
+			}
+			TRACE("Dat line to be free\n");
+			
+		}
+	}
+	
+	//FIXME : Assign only at this point, if needed :
+	// -32 bit block count/SDMA system address
+	// -block size
+	// -16-bit block count
+	// -argument
+	// -transfer mode
+	TRACE("Present state before SendCommand : %04x\n", fRegisters->present_state.Bits());
+		
 	fRegisters->command.SendCommand(command, replyType);
+	for (int i = 1 ; i <=10; i++) {
+		TRACE("Present state(%d) after SendCommand : %04x\n", i,fRegisters->present_state.Bits());
+		snooze(1000000);
+	}
 	acquire_sem(fSemaphore);
-
+	
 	if (fCommandResult & SDHCI_INT_ERROR) {
 		fRegisters->interrupt_status |= fCommandResult;
 		if (fCommandResult & SDHCI_INT_TIMEOUT) {
@@ -251,16 +305,8 @@ SdhciBus::ExecuteCommand(uint8_t command, uint32_t argument, uint32_t* response)
 		// and return a more appropriate error code
 		return B_ERROR;
 	}
-	//14) wait for buffer read ready interrupt (the wait is done through the semaphore fSemaphore)
-	if (fCommandResult & SDHCI_INT_BUF_READ_READY) {
-		//15) clear the "buffer read ready" interrupt  bit
-		fRegisters->interrupt_status |= SDHCI_INT_BUF_READ_READY;
-		//15) read block data from Buffer Data Port register
-		release_sem(fSemRead);	
-
-	}
-
-	if (fRegisters->present_state.CommandInhibit()) {
+	
+	if (fRegisters->present_state.CommandInhibitCMD()) {
 		TRACE("Command execution failed, card stalled\n");
 		// Clear the stall
 		fRegisters->software_reset.ResetCommandLine();
@@ -277,12 +323,16 @@ SdhciBus::ExecuteCommand(uint8_t command, uint32_t argument, uint32_t* response)
 			response[2] = fRegisters->response[2];
 			response[3] = fRegisters->response[3];
 			break;
+
+		//TODO in case replyType is R1b, test if transfer_complete is present, if not, acquire_sem(fSemTransfer)
+
 		default:
 			// No response
 			break;
 	}
 
-	ERROR("Command execution complete\n");
+	ERROR("Command execution %d complete\n", command);
+	TRACE("Present state at end of command : %04x\n", fRegisters->present_state.Bits());
 	return B_OK;
 }
 
@@ -342,7 +392,18 @@ SdhciBus::SetClock(int kilohertz)
 }
 
 // #pragma mark -
-status_t SdhciBus::ReadNaive(off_t pos, void* buffer, size_t* _length) {
+status_t SdhciBus::ReadNaive(uint16_t rca, off_t pos, void* buffer, 
+	size_t* _length) {
+	
+	//Select card
+	uint32_t response;
+	ExecuteCommand(SELECT_DESELECT_CARD, rca <<16, &response);
+	
+	//TODO instead of waiting for Transfer complete here, 
+	//implement in ExecuteCommand the TODO  : in case where replyType is R1b, 
+	//test if transfer_complete is present, if not, acquire_sem(fSemTransfer) there 
+	acquire_sem(fSemTransfer);
+	
 	//1) Set block size reg	
 	fRegisters->block_size = 512;
 	
@@ -354,6 +415,8 @@ status_t SdhciBus::ReadNaive(off_t pos, void* buffer, size_t* _length) {
 	//ExecuteCommand
 	
 	//4) Set transfer mode
+	fRegisters->transfer_mode.SetBlockCountEnable(true);
+	DumpRegisters(fSlot);
 	fRegisters->transfer_mode.SetMultiSingleBlockSelect(TransferMode::kSingle);
 	fRegisters->transfer_mode.SetDataTransferDirectionSelect(TransferMode::kRead);
 	//Not needed since Multi/Single Block Select is 0
@@ -361,18 +424,18 @@ status_t SdhciBus::ReadNaive(off_t pos, void* buffer, size_t* _length) {
 	fRegisters->transfer_mode.SetAutoCmdEnable(TransferMode::kAutoCmdDisabled);
 	fRegisters->transfer_mode.SetDmaEnable(TransferMode::kNoDmaOrNoData);
 	//Response Error Check by Host Controller not useful yet, maybe for ADMA3 to speed up.
-	fRegisters->transfer_mode.SetResponseErrorCheckEnable(false ); 
+	fRegisters->transfer_mode.SetResponseErrorCheckEnable(true ); 
 	if (fRegisters->transfer_mode.IsResponseErrorCheckEnable()) {
 		fRegisters->transfer_mode.SetResponseInterruptDisable(true);
 		fRegisters->transfer_mode.SetResponseTypeR1R5(TransferMode::kR1);//Memory
 	}
-	
+	//DumpRegisters(fSlot);
 	//5) Set the value to Command register
 	//6) Wait for Command Complete interrupt (as "response check enable" is false, no need to go to stop
 	//7) Write 1 to Command Complete register
 	//8) Read Response register
-	uint32_t response;
 	ExecuteCommand(READ_SINGLE_BLOCK, pos, &response);
+	//DumpRegisters(fSlot);
 	
 	//15) read block data from Buffer Data Port register
 	acquire_sem(fSemRead);
@@ -381,6 +444,7 @@ status_t SdhciBus::ReadNaive(off_t pos, void* buffer, size_t* _length) {
 	while(to_read > 0) {
 		TRACE("read : 0x%x", fRegisters->buffer_data_port);
 		read++;
+		to_read--;
 	}
 	*_length = read;
 	return B_OK;	
@@ -536,8 +600,10 @@ SdhciBus::RecoverError()
 int32
 SdhciBus::HandleInterrupt()
 {
+	CALLED();
 	uint32_t intmask = fRegisters->interrupt_status;
-
+	bool handled = false;
+	
 	if ((intmask == 0) || (intmask == 0xffffffff)) {
 		return B_UNHANDLED_INTERRUPT;
 	}
@@ -547,6 +613,7 @@ SdhciBus::HandleInterrupt()
 	// FIXME use the global "slot interrupt" register to quickly decide if an
 	// interrupt is targetted to this slot
 	if ( !(fRegisters->slot_interrupt_status & (1 << fSlot)) ) {
+		TRACE("interrupt not for me.\n");
 		return B_UNHANDLED_INTERRUPT;
 	}
 	
@@ -573,14 +640,36 @@ SdhciBus::HandleInterrupt()
 	// handling command interrupt
 	if (intmask & SDHCI_INT_CMD_MASK) {
 		fCommandResult = intmask;
-			// Save the status before clearing so the thhread can handle it
+		// Save the status before clearing so the thhread can handle it
 		fRegisters->interrupt_status |= (intmask & SDHCI_INT_CMD_MASK);
+		TRACE("Present state in handling interrupt: %04x\n", fRegisters->present_state.Bits());
+
 		// Notify the thread
 		release_sem_etc(fSemaphore, 1, B_DO_NOT_RESCHEDULE);
-		TRACE("Command interrupt handled\n");
-
-		return B_HANDLED_INTERRUPT;
+		TRACE("Command complete interrupt handled\n");
+		handled = true;
 	}
+
+	// handling transfer interrupt
+	if (intmask & SDHCI_INT_TRANS_CMP) {
+		fRegisters->interrupt_status |= (intmask & SDHCI_INT_TRANS_CMP);
+		// Notify the thread
+		release_sem_etc(fSemTransfer, 1, B_DO_NOT_RESCHEDULE);
+		TRACE("Transfer complete interrupt handled\n");
+		handled = true;
+	}
+	
+	// handling data transfer interrupt
+	//14) wait for buffer read ready interrupt (the wait is done through the semaphore fSemRead)
+	if (intmask & SDHCI_INT_BUF_READ_READY) {
+		TRACE("buffer read ready interrupt raised");
+		//15) clear the "buffer read ready" interrupt  bit
+		fRegisters->interrupt_status |= (intmask & SDHCI_INT_BUF_READ_READY);
+		//15) read block data from Buffer Data Port register
+		release_sem_etc(fSemRead, 1, B_DO_NOT_RESCHEDULE);	
+		handled = true;
+	}
+	
 
 	// handling bus power interrupt
 	if (intmask & SDHCI_INT_BUS_POWER) {
@@ -595,7 +684,10 @@ SdhciBus::HandleInterrupt()
 		ERROR("Remaining interrupts at end of handler: %x\n", intmask);
 	}
 	
-	return B_UNHANDLED_INTERRUPT;
+	if (handled)
+		return B_HANDLED_INTERRUPT;
+	else
+		return B_UNHANDLED_INTERRUPT;
 }
 // #pragma mark -
 
@@ -732,15 +824,15 @@ execute_command(void* controller, uint8_t command, uint32_t argument,
 
 //Very naive read protocol : non DMA, 32 bits at a time (size of Buffer Data Port)
 static status_t 
-read_naive(void* controller, off_t pos, void* buffer, size_t* _length) 
+read_naive(void* controller, uint16_t rca, off_t pos, void* buffer, size_t* _length) 
 {
 	CALLED();
-	TRACE("read_native : truncate to first 512 bytes");
+	TRACE("read_native : truncate to first 512 bytes\n");
 	
 	SdhciBus* bus = (SdhciBus*)controller;
 	off_t pos_0 = 0;
 	*_length=512;
-	return bus->ReadNaive(pos_0, buffer, _length);
+	return bus->ReadNaive(rca, pos_0, buffer, _length);
 	
 }
 module_dependency module_dependencies[] = {
