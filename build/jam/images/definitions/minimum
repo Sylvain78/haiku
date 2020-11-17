@@ -220,6 +220,7 @@ SYSTEM_ADD_ONS_BUS_MANAGERS = [ FFilterByBuildFeatures
 	random
 	usb
 	virtio
+	mmc_bus
 ] ;
 
 SYSTEM_ADD_ONS_FILE_SYSTEMS =

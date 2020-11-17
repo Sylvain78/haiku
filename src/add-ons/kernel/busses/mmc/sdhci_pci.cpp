@@ -284,9 +284,11 @@ SdhciBus::ExecuteCommand(uint8_t command, uint32_t argument, uint32_t* response)
 	TRACE("Present state before SendCommand : %04x\n", fRegisters->present_state.Bits());
 		
 	fRegisters->command.SendCommand(command, replyType);
+
 	for (int i = 1 ; i <=10; i++) {
+		spin(1000000);
 		TRACE("Present state(%d) after SendCommand : %04x\n", i,fRegisters->present_state.Bits());
-		snooze(1000000);
+		
 	}
 	acquire_sem(fSemaphore);
 	
