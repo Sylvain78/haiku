@@ -1977,13 +1977,6 @@ exec_team(const char* path, char**& _flatArgs, size_t flatArgsSize,
 	if (team == team_get_kernel_team())
 		return B_NOT_ALLOWED;
 
-	// we currently need to be single threaded here
-	// TODO: maybe we should just kill all other threads and
-	//	make the current thread the team's main thread?
-	Thread* currentThread = thread_get_current_thread();
-	if (currentThread != team->main_thread)
-		return B_NOT_ALLOWED;
-
 	// The debug nub thread, a pure kernel thread, is allowed to survive.
 	// We iterate through the thread list to make sure that there's no other
 	// thread.
