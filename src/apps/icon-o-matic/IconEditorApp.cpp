@@ -246,6 +246,7 @@ IconEditorApp::RefsReceived(BMessage* message)
 		window->Unlock();
 	} else {
 		for (int32 i = 0; message->FindRef("refs", i, &ref) == B_OK; i++) {
+			fLastOpenPath = ref->Path();
 			if (window != NULL && i == 0) {
 				window->Lock();
 				window->Open(ref, false);
