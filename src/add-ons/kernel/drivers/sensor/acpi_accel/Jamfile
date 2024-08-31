@@ -1,0 +1,11 @@
+SubDir HAIKU_TOP src add-ons kernel drivers sensor acpi_accel ;
+
+UsePrivateKernelHeaders ;
+
+SubDirHdrs [ FDirName $(SUBDIR) $(DOTDOT) $(DOTDOT) $(DOTDOT) bus_managers acpi acpica include ] ;
+SubDirHdrs [ FDirName $(SUBDIR) $(DOTDOT) $(DOTDOT) $(DOTDOT) bus_managers acpi acpica include platform ] ;
+
+KernelAddon acpi_accel :
+	acpi_accel.cpp
+	;
+
