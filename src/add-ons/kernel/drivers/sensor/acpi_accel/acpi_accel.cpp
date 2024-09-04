@@ -50,7 +50,7 @@ struct cmpc_accel {
 // name of pnp generator of path ids
 #define ACPI_ACCEL_PATHID_GENERATOR "acpi_accel/path_id"
 
-#define ACPI_NAME_ACCEL "ACCE001"
+#define ACPI_NAME_ACCEL "ACCE0001"
 
 #define TRACE_ACCEL 1
 #ifdef TRACE_ACCEL
@@ -185,6 +185,41 @@ acpi_accel_close(void* cookie)
 	return B_OK;
 }
 
+
+
+static acpi_status cmpc_get_accel_v4(acpi_handle handle,
+				     int16_t *x,
+				     int16_t *y,
+				     int16_t *z)
+{
+	union acpi_object param[4];
+	struct acpi_object_list input;
+	struct acpi_buffer output = { ACPI_ALLOCATE_BUFFER, NULL };
+	int16_t *locs;
+	acpi_status status;
+
+	param[0].type = ACPI_TYPE_INTEGER;
+	param[0].integer.value = 0x01;
+	param[1].type = ACPI_TYPE_INTEGER;
+	param[1].integer.value = 0;
+	param[2].type = ACPI_TYPE_INTEGER;
+	param[2].integer.value = 0;
+	param[3].type = ACPI_TYPE_INTEGER;
+	param[3].integer.value = 0;
+	input.count = 4;
+	input.pointer = param;
+	status = device->acpi->evaluate_method(device->acpi_cookie, "ACMD",  &input, &output);
+	if (status == B_OK) {
+		union acpi_object *obj;
+		obj = output.pointer;
+		locs = (int16_t *) obj->buffer.pointer;
+		*x = locs[0];
+		*y = locs[1];
+		*z = locs[2];
+		kfree(output.pointer);
+	}
+	return status;
+}
 
 static status_t
 acpi_accel_read(void* _cookie, off_t position, void *buffer, size_t* numBytes)
@@ -321,13 +356,6 @@ acpi_accel_init_driver(device_node *node, void **driverCookie)
 		return B_ERROR;
 	}
 
-	uint64 luminance;
-	status = acpi_GetInteger(device, "_ALI", &luminance);
-	if (status != B_OK) {
-		ERROR("acpi_accel_init_driver error when calling _ALI\n");
-		return B_ERROR;
-	}
-
 	// install notify handler
 	device->acpi->install_notify_handler(device->acpi_cookie,
 		ACPI_ALL_NOTIFY, accel_notify_handler, device);
@@ -366,11 +394,6 @@ acpi_accel_register_child_devices(void *cookie)
 	return sDeviceManager->publish_device(device->node, name,
 		ACPI_ACCEL_DEVICE_NAME);
 }
-
-
-
-
-
 
 module_dependency module_dependencies[] = {
 	{ B_DEVICE_MANAGER_MODULE_NAME, (module_info **)&sDeviceManager },
