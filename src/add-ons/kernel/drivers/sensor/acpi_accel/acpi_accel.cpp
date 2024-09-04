@@ -146,7 +146,48 @@ static acpi_status cmpc_start_accel_v4(accel_driver_cookie *device) {
 	return acpi_SendCommand(device, 0x03, 0);
 }
 
-static status_t
+static acpi_status cmpc_get_accel_v4(accel_driver_cookie *device,
+		int16_t *x,
+		int16_t *y,
+		int16_t *z)
+{
+	acpi_object_type array[4];
+	acpi_objects input;
+	input.count = 4;
+	input.pointer = array;
+	acpi_data output;
+	int16_t *locs;
+	acpi_status status;
+
+	array[0].object_type = ACPI_TYPE_INTEGER;
+	array[0].integer.integer = 0x01;
+	array[1].object_type = ACPI_TYPE_INTEGER;
+	array[1].integer.integer = 0;
+	array[2].object_type = ACPI_TYPE_INTEGER;
+	array[2].integer.integer = 0;
+	array[3].object_type = ACPI_TYPE_INTEGER;
+	array[3].integer.integer = 0;
+	status = device->acpi->evaluate_method(device->acpi_cookie, "ACMD",  &input, &output);
+	if (status == B_OK) {
+		acpi_object_type* object = (acpi_object_type*)output.pointer;
+		locs = (int16_t *)object->buffer.buffer;
+		*x = locs[0];
+		*y = locs[1];
+		*z = locs[2];
+		/*
+		   union acpi_object *obj;
+		   obj = output.pointer;
+		   locs = (int16_t *) obj->buffer.pointer;
+		 *x = locs[0];
+		 *y = locs[1];
+		 *z = locs[2];
+		 kfree(output.pointer);*/
+	}
+	return status;
+}
+
+
+	static status_t
 acpi_accel_open(void *initCookie, const char *path, int flags, void** cookie)
 {
 	accel_device_cookie *device;
@@ -224,19 +265,19 @@ static acpi_status cmpc_get_accel_v4(acpi_handle handle,
 static status_t
 acpi_accel_read(void* _cookie, off_t position, void *buffer, size_t* numBytes)
 {
-	if (*numBytes < 1)
+	if (*numBytes < 6)
 		return B_IO_ERROR;
 
 	accel_device_cookie *device = (accel_device_cookie*)_cookie;
+	int16_t x,y,z;
 
 	if (position == 0) {
-		char string[10];
-		uint64 luminance = 0;
-		status_t status = acpi_GetInteger(device->driver_cookie,
-			"_ALI", &luminance);
-		if (status != B_OK)
-			return B_ERROR;
-		snprintf(string, sizeof(string), "%" B_PRIu64 "\n", luminance);
+		char string[26];
+		acpi_status status = cmpc_get_accel_v4(device->driver_cookie, &x, &y, &z)
+
+			if (status != B_OK)
+				return B_ERROR;
+		snprintf(string, sizeof(string), "x=%" B_PRIu16 ", y=%" B_PRIu16 ", z=" B_PRIu16 "\n", x, y, z);
 		size_t max_len = user_strlcpy((char*)buffer, string, *numBytes);
 		if (max_len < B_OK)
 			return B_BAD_ADDRESS;
