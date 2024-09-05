@@ -174,6 +174,7 @@ static acpi_status cmpc_get_accel_v4(accel_driver_cookie *device,
 		*x = locs[0];
 		*y = locs[1];
 		*z = locs[2];
+		free(object);
 		/*
 		   union acpi_object *obj;
 		   obj = output.pointer;
@@ -226,43 +227,7 @@ acpi_accel_close(void* cookie)
 	return B_OK;
 }
 
-
-
-static acpi_status cmpc_get_accel_v4(acpi_handle handle,
-				     int16_t *x,
-				     int16_t *y,
-				     int16_t *z)
-{
-	union acpi_object param[4];
-	struct acpi_object_list input;
-	struct acpi_buffer output = { ACPI_ALLOCATE_BUFFER, NULL };
-	int16_t *locs;
-	acpi_status status;
-
-	param[0].type = ACPI_TYPE_INTEGER;
-	param[0].integer.value = 0x01;
-	param[1].type = ACPI_TYPE_INTEGER;
-	param[1].integer.value = 0;
-	param[2].type = ACPI_TYPE_INTEGER;
-	param[2].integer.value = 0;
-	param[3].type = ACPI_TYPE_INTEGER;
-	param[3].integer.value = 0;
-	input.count = 4;
-	input.pointer = param;
-	status = device->acpi->evaluate_method(device->acpi_cookie, "ACMD",  &input, &output);
-	if (status == B_OK) {
-		union acpi_object *obj;
-		obj = output.pointer;
-		locs = (int16_t *) obj->buffer.pointer;
-		*x = locs[0];
-		*y = locs[1];
-		*z = locs[2];
-		kfree(output.pointer);
-	}
-	return status;
-}
-
-static status_t
+	static status_t
 acpi_accel_read(void* _cookie, off_t position, void *buffer, size_t* numBytes)
 {
 	if (*numBytes < 6)
@@ -273,11 +238,10 @@ acpi_accel_read(void* _cookie, off_t position, void *buffer, size_t* numBytes)
 
 	if (position == 0) {
 		char string[26];
-		acpi_status status = cmpc_get_accel_v4(device->driver_cookie, &x, &y, &z)
-
-			if (status != B_OK)
-				return B_ERROR;
-		snprintf(string, sizeof(string), "x=%" B_PRIu16 ", y=%" B_PRIu16 ", z=" B_PRIu16 "\n", x, y, z);
+		acpi_status status = cmpc_get_accel_v4(device->driver_cookie, &x, &y, &z);
+		if (status != B_OK)
+			return B_ERROR;
+		snprintf(string, sizeof(string), "x=%" B_PRIu16 ", y=%" B_PRIu16 ", z=%" B_PRIu16 "\n", x, y, z);
 		size_t max_len = user_strlcpy((char*)buffer, string, *numBytes);
 		if (max_len < B_OK)
 			return B_BAD_ADDRESS;
@@ -289,15 +253,15 @@ acpi_accel_read(void* _cookie, off_t position, void *buffer, size_t* numBytes)
 }
 
 
-static status_t
+	static status_t
 acpi_accel_write(void* cookie, off_t position, const void* buffer,
-	size_t* numBytes)
+		size_t* numBytes)
 {
 	return B_ERROR;
 }
 
 
-static status_t
+	static status_t
 acpi_accel_control(void* _cookie, uint32 op, void* arg, size_t len)
 {
 	//accel_device_cookie* device = (accel_device_cookie*)_cookie;
