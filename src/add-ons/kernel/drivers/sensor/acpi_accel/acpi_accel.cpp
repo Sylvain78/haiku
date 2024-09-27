@@ -168,6 +168,7 @@ static acpi_status cmpc_get_accel_v4(accel_driver_cookie *device,
 	array[3].object_type = ACPI_TYPE_INTEGER;
 	array[3].integer.integer = 0;
 	status = device->acpi->evaluate_method(device->acpi_cookie, "ACMD",  &input, &output);
+	TRACE ("Z: %ld", status);
 	if (status == B_OK) {
 		acpi_object_type* object = (acpi_object_type*)output.pointer;
 		locs = (int16_t *)object->buffer.buffer;
@@ -230,8 +231,10 @@ acpi_accel_close(void* cookie)
 	static status_t
 acpi_accel_read(void* _cookie, off_t position, void *buffer, size_t* numBytes)
 {
-	if (*numBytes < 6)
+TRACE("numBytes: %" B_PRIu32 "\n", *numBytes);
+if (*numBytes < 6)
 		return B_IO_ERROR;
+TRACE("B");
 
 	accel_device_cookie *device = (accel_device_cookie*)_cookie;
 	int16_t x,y,z;
@@ -239,9 +242,12 @@ acpi_accel_read(void* _cookie, off_t position, void *buffer, size_t* numBytes)
 	if (position == 0) {
 		char string[26];
 		acpi_status status = cmpc_get_accel_v4(device->driver_cookie, &x, &y, &z);
+TRACE("C");
 		if (status != B_OK)
 			return B_ERROR;
+TRACE("D");
 		snprintf(string, sizeof(string), "x=%" B_PRIu16 ", y=%" B_PRIu16 ", z=%" B_PRIu16 "\n", x, y, z);
+TRACE("E");
 		size_t max_len = user_strlcpy((char*)buffer, string, *numBytes);
 		if (max_len < B_OK)
 			return B_BAD_ADDRESS;
