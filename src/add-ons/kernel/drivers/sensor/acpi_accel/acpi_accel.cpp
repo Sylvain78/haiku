@@ -58,7 +58,7 @@ struct cmpc_accel {
 #else
 #	define TRACE(x...)
 #endif
-#define ERROR(x...) dprintf("acpi_accel: " x)
+#define ERROR(x...) dprintf("acpi_accel(error): " x)
 
 
 static device_manager_info *sDeviceManager;
@@ -108,13 +108,6 @@ static acpi_status acpi_SendCommand(accel_driver_cookie *device, int command, in
 	return device->acpi->evaluate_method(device->acpi_cookie, "ACMD", &acpi_objects, NULL);
 }
 
-void
-accel_notify_handler(acpi_handle device, uint32 value, void *context)
-{
-	TRACE("accel_notify_handler event 0x%" B_PRIx32 "\n", value);
-	sACCELCondition.NotifyAll();
-}
-
 
 //	#pragma mark - device module API
 
@@ -123,6 +116,13 @@ static status_t
 acpi_accel_init_device(void *driverCookie, void **cookie)
 {
 	*cookie = driverCookie;
+	
+	//TODO
+	/*
+	input_set_abs_params(inputdev, ABS_X, -255, 255, 16, 0);
+	input_set_abs_params(inputdev, ABS_Y, -255, 255, 16, 0);
+	input_set_abs_params(inputdev, ABS_Z, -255, 255, 16, 0);
+	*/
 	return B_OK;
 }
 
@@ -136,6 +136,7 @@ static acpi_status cmpc_accel_set_sensitivity_v4(accel_driver_cookie *device, in
 {
 	return acpi_SendCommand(device, 0x02, val);
 }
+
 
 static acpi_status cmpc_accel_set_g_select_v4(accel_driver_cookie *device, int val)
 {
@@ -155,7 +156,7 @@ static acpi_status cmpc_get_accel_v4(accel_driver_cookie *device,
 	acpi_objects input;
 	input.count = 4;
 	input.pointer = array;
-	acpi_data output;
+	acpi_data output = { ACPI_ALLOCATE_BUFFER, NULL };
 	int16_t *locs;
 	acpi_status status;
 
@@ -168,8 +169,9 @@ static acpi_status cmpc_get_accel_v4(accel_driver_cookie *device,
 	array[3].object_type = ACPI_TYPE_INTEGER;
 	array[3].integer.integer = 0;
 	status = device->acpi->evaluate_method(device->acpi_cookie, "ACMD",  &input, &output);
-	TRACE ("Z: %ld", status);
+	TRACE ("Z: %" B_PRIi32 "\n", status);
 	if (status == B_OK) {
+	TRACE ("ZOK\n");
 		acpi_object_type* object = (acpi_object_type*)output.pointer;
 		locs = (int16_t *)object->buffer.buffer;
 		*x = locs[0];
@@ -186,6 +188,24 @@ static acpi_status cmpc_get_accel_v4(accel_driver_cookie *device,
 		 kfree(output.pointer);*/
 	}
 	return status;
+}
+
+void
+accel_notify_handler(acpi_handle device, uint32 value, void *context)
+{
+	int16_t x, y, z;
+	acpi_status status;
+	TRACE("accel_notify_handler event 0x%" B_PRIx32 "\n", value);
+
+	if (value == 0x81) { 
+
+		accel_driver_cookie* dev = (accel_driver_cookie*) context;
+		status = cmpc_get_accel_v4(dev, &x, &y, &z);
+		TRACE("notify->get status = %" B_PRIi32 "\n", status);
+	}
+
+
+	sACCELCondition.NotifyAll();
 }
 
 
@@ -212,7 +232,8 @@ acpi_accel_open(void *initCookie, const char *path, int flags, void** cookie)
 	accel->sensitivity = CMPC_ACCEL_SENSITIVITY_DEFAULT;
 	accel->g_select = CMPC_ACCEL_G_SELECT_DEFAULT;
 
-	cmpc_accel_set_sensitivity_v4(device->driver_cookie, accel->sensitivity);
+	acpi_status status = cmpc_accel_set_sensitivity_v4(device->driver_cookie, accel->sensitivity);
+	TRACE("set_sensitivity status=%u\n", status);
 	cmpc_accel_set_g_select_v4(device->driver_cookie, accel->g_select);
 
 	if (cmpc_start_accel_v4(device->driver_cookie) == B_OK) {
@@ -221,20 +242,19 @@ acpi_accel_open(void *initCookie, const char *path, int flags, void** cookie)
 	return B_IO_ERROR;
 }
 
-
 static status_t
 acpi_accel_close(void* cookie)
 {
-	return B_OK;
+	return B_OK;//TODO acpi_SendCommand(device, 0x04, 0);
 }
 
 	static status_t
 acpi_accel_read(void* _cookie, off_t position, void *buffer, size_t* numBytes)
 {
-TRACE("numBytes: %" B_PRIu32 "\n", *numBytes);
+TRACE("numBytes: %" B_PRIuSIZE "\n", *numBytes);
 if (*numBytes < 6)
 		return B_IO_ERROR;
-TRACE("B");
+TRACE("B\n");
 
 	accel_device_cookie *device = (accel_device_cookie*)_cookie;
 	int16_t x,y,z;
@@ -242,12 +262,12 @@ TRACE("B");
 	if (position == 0) {
 		char string[26];
 		acpi_status status = cmpc_get_accel_v4(device->driver_cookie, &x, &y, &z);
-TRACE("C");
+TRACE("C\n");
 		if (status != B_OK)
 			return B_ERROR;
-TRACE("D");
+TRACE("D\n");
 		snprintf(string, sizeof(string), "x=%" B_PRIu16 ", y=%" B_PRIu16 ", z=%" B_PRIu16 "\n", x, y, z);
-TRACE("E");
+TRACE("E\n");
 		size_t max_len = user_strlcpy((char*)buffer, string, *numBytes);
 		if (max_len < B_OK)
 			return B_BAD_ADDRESS;
