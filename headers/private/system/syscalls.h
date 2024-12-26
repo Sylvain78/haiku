@@ -295,7 +295,7 @@ extern status_t		_kern_unlink(int fd, const char *path);
 extern status_t		_kern_rename(int oldDir, const char *oldpath, int newDir,
 						const char *newpath);
 extern status_t		_kern_create_fifo(int fd, const char *path, mode_t perms);
-extern status_t		_kern_create_pipe(int *fds);
+extern status_t		_kern_create_pipe(int *fds, int flags);
 extern status_t		_kern_access(int fd, const char *path, int mode,
 						bool effectiveUserGroup);
 extern ssize_t		_kern_select(int numfds, struct fd_set *readSet,
@@ -349,7 +349,7 @@ extern status_t		_kern_write_stat(int fd, const char *path,
 						size_t statSize, int statMask);
 extern status_t		_kern_close(int fd);
 extern int			_kern_dup(int fd);
-extern int			_kern_dup2(int ofd, int nfd);
+extern int			_kern_dup2(int ofd, int nfd, int flags);
 extern status_t		_kern_lock_node(int fd);
 extern status_t		_kern_unlock_node(int fd);
 extern status_t		_kern_get_next_fd_info(team_id team, uint32 *_cookie,
@@ -365,7 +365,7 @@ extern status_t		_kern_connect(int socket, const struct sockaddr *address,
 						socklen_t addressLength);
 extern status_t		_kern_listen(int socket, int backlog);
 extern int			_kern_accept(int socket, struct sockaddr *address,
-						socklen_t *_addressLength);
+						socklen_t *_addressLength, int flags);
 extern ssize_t		_kern_recv(int socket, void *data, size_t length,
 						int flags);
 extern ssize_t		_kern_recvfrom(int socket, void *data, size_t length,
@@ -412,6 +412,7 @@ extern status_t		_kern_get_real_time_clock_is_gmt(bool *_isGMT);
 
 extern status_t		_kern_get_clock(clockid_t clockID, bigtime_t* _time);
 extern status_t		_kern_set_clock(clockid_t clockID, bigtime_t time);
+extern status_t		_kern_get_cpuclockid(thread_id id, int32 which, clockid_t* _clockID);
 
 extern bigtime_t	_kern_system_time();
 extern status_t		_kern_snooze_etc(bigtime_t time, int timebase, int32 flags,

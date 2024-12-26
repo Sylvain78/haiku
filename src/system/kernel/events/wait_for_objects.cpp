@@ -949,7 +949,7 @@ check_max_fds(int numFDs)
 		return true;
 
 	struct io_context *context = get_current_io_context(false);
-	MutexLocker(&context->io_mutex);
+	ReadLocker locker(&context->lock);
 	return (size_t)numFDs <= context->table_size;
 }
 
@@ -968,7 +968,7 @@ _user_select(int numFDs, fd_set *userReadSet, fd_set *userWriteSet,
 			timeout = B_INFINITE_TIMEOUT;
 	}
 
-	if (numFDs < 0 || !check_max_fds(numFDs))
+	if (numFDs < 0 || (numFDs > FD_SETSIZE && !check_max_fds(numFDs)))
 		return B_BAD_VALUE;
 
 	if ((userReadSet != NULL && !IS_USER_ADDRESS(userReadSet))

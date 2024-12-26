@@ -11,20 +11,20 @@ SYSTEM_ADD_ONS_DRIVERS_NET = [ FFilterByBuildFeatures
 		3com
 		atheros813x
 		atheros81xx
+		attansic_l2
 		broadcom440x
 		broadcom570x
-		ipro1000
-		rtl8139
-		via_rhine
 		ipro100
-		nforce
+		ipro1000
 		marvell_yukon
+		nforce
+		rtl8139
+		rtl81xx
 		sis900
 		syskonnect
-		attansic_l2
+		via_rhine
 	}@ # x86,x86_64
 
-	rtl81xx
 	etherpci
 	pegasus
 	usb_ecm
@@ -32,7 +32,9 @@ SYSTEM_ADD_ONS_DRIVERS_NET = [ FFilterByBuildFeatures
 ] ;
 SYSTEM_ADD_ONS_BUS_MANAGERS = [ FFilterByBuildFeatures
 	pci
+	<pci>x86@x86,x86_64
 	isa@x86
+	usb
 	ata
 	scsi
 	agp_gart
@@ -66,7 +68,6 @@ AddFilesToNetBootArchive system add-ons kernel file_systems
 	: $(SYSTEM_ADD_ONS_FILE_SYSTEMS) ;
 AddFilesToNetBootArchive system add-ons kernel generic :
 	ata_adapter
-	locked_pool
 	scsi_periph
 	;
 AddFilesToNetBootArchive system add-ons kernel partitioning_systems :
@@ -76,14 +77,12 @@ AddFilesToNetBootArchive system add-ons kernel partitioning_systems :
 AddFilesToNetBootArchive system add-ons kernel interrupt_controllers :
 	openpic@ppc
 	;
-
-if $(TARGET_ARCH) = x86 {
+if $(TARGET_ARCH) = x86 || $(TARGET_ARCH) = x86_64 {
 	AddFilesToNetBootArchive system add-ons kernel cpu
 		:
 		generic_x86
 		;
 }
-
 # drivers
 AddNewDriversToNetBootArchive disk scsi :
 	scsi_cd
@@ -134,12 +133,12 @@ AddBootModuleSymlinksToNetBootArchive
 	silicon_image_3112
 	$(SYSTEM_ADD_ONS_FILE_SYSTEMS)
 	ata_adapter
-	locked_pool
 	scsi_periph
 	intel
 	session
 	openpic@ppc
 	generic_x86@x86
+#	generic_x86@x86_64
 #	nbd
 	remote_disk
 	$(SYSTEM_ADD_ONS_DRIVERS_NET)

@@ -1190,6 +1190,21 @@ add_boot_volume_item(Menu* menu, Directory* volume, const char* name)
 			volumeInfo.Unset();
 	}
 
+	// Display the size of this boot partition, if we can.
+	Partition* partition;
+	if (gRoot->GetPartitionFor(volume, &partition) == B_OK) {
+		float size = partition->Size() / (1024.0 * 1024.0);
+		const char* unit = "MiB";
+		if (size > 1024.0) {
+			size /= 1024.0;
+			unit = "GiB";
+		}
+
+		char* newName = (char*)alloca(128);
+		snprintf(newName, 128, "%s (%f %s)", name, size, unit);
+		name = newName;
+	}
+
 	BootVolumeMenuItem* item = new(nothrow) BootVolumeMenuItem(name);
 	menu->AddItem(item);
 
@@ -1279,9 +1294,20 @@ add_boot_volume_menu()
 	menu->AddItem(item = new(nothrow) MenuItem("Return to main menu"));
 	item->SetType(MENU_ITEM_NO_CHOICE);
 
-	if (gBootVolume.GetBool(BOOT_VOLUME_BOOTED_FROM_IMAGE, false))
-		menu->SetChoiceText("CD-ROM or hard drive");
-
+	if (gBootVolume.GetBool(BOOT_VOLUME_BOOTED_FROM_IMAGE, false)) {
+		int32 bootMethod = gBootVolume.GetInt32(BOOT_METHOD, BOOT_METHOD_DEFAULT);
+		switch (bootMethod) {
+			case BOOT_METHOD_CD:
+				menu->SetChoiceText("CD-ROM");
+				break;
+			case BOOT_METHOD_HARD_DISK:
+				menu->SetChoiceText("Hard drive");
+				break;
+			case BOOT_METHOD_NET:
+				menu->SetChoiceText("Network");
+				break;
+		}
+	}
 	return menu;
 }
 

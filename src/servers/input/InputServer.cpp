@@ -1684,7 +1684,7 @@ InputServer::_SanitizeEvents(EventList& events)
 	   		case B_MOUSE_MOVED:
 	   		case B_MOUSE_DOWN:
 	   		{
-	   			int32 buttons;
+				int32 buttons;
 	   			if (event->FindInt32("buttons", &buttons) != B_OK)
 	   				event->AddInt32("buttons", 0);
 

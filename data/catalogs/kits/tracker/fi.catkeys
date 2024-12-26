@@ -1,4 +1,4 @@
-1	finnish	x-vnd.Haiku-libtracker	3099940411
+1	finnish	x-vnd.Haiku-libtracker	4238208634
 Created	ContainerWindow		Luotu
 Icon	AttributesView		Kuvake
 Open and make preferred	OpenWithWindow		Avaa ja tee ensisijaiseksi
@@ -17,8 +17,8 @@ Save as query template:	FindPanel		Tallenna kysely mallinteena:
 Current folder	ContainerWindow		Nykyiset kansiot
 Finish: %time - Over %finishtime left	StatusWindow		Loppuu: %time - Yli %finistime jäljellä
 Mount all disks now	AutoMounterSettings		Liitä kaikki levyt nyt
-Name	PoseView		Nimi
 Location:	InfoWindow		Sijainti:
+Name	PoseView		Nimi
 Kind:	InfoWindow		Tyyppi:
 contains	FindPanel		sisältää
 Open	FilePanelPriv		Avaa
@@ -30,6 +30,7 @@ Unmount	ContainerWindow		Irrota
 Eject when unmounting	AutoMounterSettings		Poista laitteesta irrotettaessa
 Searching for disks to mount…	StatusWindow		Etsitään liitettäviä levyjä...
 Value	AttributesView		Arvo
+Multiple selections	FindPanel		Useita valintoja
 Information	InfoWindow		Tietoja
 Error emptying Trash	FSUtils		Virhe tyhjennettäessä roskakoria
 Opens with:	InfoWindow		Avautuu sovelluksella:
@@ -61,6 +62,7 @@ starts with	FindPanel		alkaa kohteella
 Replace	FSUtils		Korvaa
 ?+* follows nothing.	libtracker		?+* seuraavat ei mitään.
 Rectangle	AttributesView		Suorakaide
+Include Trash	FindPanel		Sisällytä roskakori
 Move to	ContainerWindow		Siirrä kohteeseen
 Status	Email Query Columns		Tila
 New folder	FSUtils		Uusi kansio
@@ -106,6 +108,7 @@ Window	ContainerWindow		Ikkuna
 %BytesPerSecond/s	StatusWindow		%BytesPerSecond/s
 Remove	FindPanel		Poista
 Company	Person Query Columns		Yritys
+Select folders…	FindPanel		Valitse kansiot…
 Recent documents	FavoritesMenu		Äskettäiset asiakirjat
 Edit templates…	TemplatesMenu		Muokkaa mallinteita...
 {0, plural, one{# byte} other{# bytes}}	FSUtils		{0, plural, one{# tavu} other{# tavua}}
@@ -146,6 +149,7 @@ Disks	Model		Levyt
 Create a Query template	FindPanel		Luo kyselymallinne
 Size	FindPanel		Koko
 Window	FilePanelPriv		Ikkuna
+New submenu	ContainerWindow	Folder name of New-template submenu	Uusi alivalikko
 OK	Email Query Columns		Valmis
 Location	QueryPoseView		Sijainti
 Edit query	ContainerWindow		Muokkaa kyselyä
@@ -174,6 +178,7 @@ Open selection with:	OpenWithWindow		Avaa valinta sovelluksella:
 Preferences…	ContainerWindow		Asetukset…
 Could not open \"%document\" because application \"%app\" is in the Trash. 	FSUtils		Asiakirjan ”%document” avaus epäonnistui, koska sovellus ”%app” on roskakorissa. 
 Work Phone	Person Query Columns		Työpuhelin
+Select folders	FindPanel		Valitse kansiot
 Close	ContainerWindow		Sulje
 Get info	ContainerWindow		Hae tiedot
 MIME Type	AttributesView		MIME-tyyppi
@@ -314,6 +319,7 @@ Open	ContainerWindow		Avaa
 Settings…	MountMenu		Asetukset...
 You cannot put the selected item(s) into the trash.	FSUtils		Et voi laittaa valittuja kohteita roskakoriin.
 Increase size	DeskWindow		Kasvata kokoa
+Target:	FindPanel	The disks/folders that are searched. Similar to TextSearch's 'Set target'.	Kohde:
 starts with	SelectionWindow		alkaa kohteella
 Any	AttributesView		Mikä tahansa
 New	DeskWindow		Uusi
@@ -337,7 +343,6 @@ To: %dir	StatusWindow		Vastaanottaja: %dir
 Paste layout	ContainerWindow		Liitä sijoittelu
 Cancel	Tracker		Peru
 yes	AttributesView		kyllä
-Error copying file \"%name\":\n\t%error\n\n	FSUtils		Virhe kopioitaessa tiedostoa \"%name\":\n\t%error\n\n
 Make active printer	ContainerWindow		Aseta aktiivinen tulostin
 Copy to	ContainerWindow		Kopioi kohteeseen
 Name	SelectionWindow		Nimi
@@ -483,13 +488,13 @@ Copy layout	ContainerWindow		Kopioi sijoittelu
 Duplicate	ContainerWindow		Kaksoiskappale
 16-bit integer	AttributesView		16-bittinen kokonaisluku
 Untitled clipping	PoseView		Otsikoton leikkaus
-Note: file names in the destination file system are not case-sensitive.\n	FSUtils		Huomaa: tiedostonimet kohdetiedostojärjestelmässä eivät ole kirjainkoosta riippuvia.\n
 The file \"%name\" already exists in the specified folder. Do you want to replace it?	FilePanelPriv		Tiedosto ”%name” on jo olemassa määritellyssä kansiossa. Haluatko korvata sen?
 , indexed	InfoWindow		, indeksoitu
 You must drop items on one of the disk icons in the \"Disks\" window.	PoseView		Sinun on pudotettava kohteet yhteen ”Levyt”-ikkunan levykuvakkeista.
 Version:	InfoWindow		Versio:
 OK	PoseView		Valmis
 Add-ons	DeskWindow		Lisäosat
+Add new submenu…	TemplatesMenu		Lisää uusi alivalikko…
 Find	FindPanel		Haku
 Empty folder	NavMenu		Tyhjä kansio
 Defaults	TrackerSettingsWindow		Oletukset

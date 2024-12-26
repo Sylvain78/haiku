@@ -10,6 +10,7 @@
 
 
 #include "PackageFilter.h"
+#include "PackageUtils.h"
 
 
 PackageFilter::~PackageFilter()
@@ -62,7 +63,7 @@ public:
 
 	virtual bool AcceptsPackage(const PackageInfoRef& package) const
 	{
-		return package->State() == fState;
+		return PackageUtils::State(package) == fState;
 	}
 
 private:
@@ -111,9 +112,8 @@ public:
 
 	virtual bool AcceptsPackage(const PackageInfoRef& package) const
 	{
-		if (!package.IsSet())
-			return false;
-		return package->DepotName() == fName;
+		BString depotName = PackageUtils::DepotName(package);
+		return !depotName.IsEmpty() && depotName == fName;
 	}
 
 	const BString& Name() const
@@ -180,10 +180,8 @@ public:
 		for (int32 i = fSearchTerms.CountStrings() - 1; i >= 0; i--) {
 			const BString& term = fSearchTerms.StringAt(i);
 			if (!_TextContains(package->Name(), term)
-				&& !_TextContains(package->Title(), term)
-				&& !_TextContains(package->Publisher().Name(), term)
-				&& !_TextContains(package->ShortDescription(), term)
-				&& !_TextContains(package->FullDescription(), term)) {
+				&& !_AcceptsPackageFromPublisher(package, term)
+				&& !_AcceptsPackageFromLocalizedText(package, term)) {
 				return false;
 			}
 		}
@@ -211,6 +209,29 @@ private:
  		int32 index = text.FindFirst(string);
  		return index >= 0;
  	}
+
+	bool _AcceptsPackageFromPublisher(const PackageInfoRef& package,
+		const BString& searchTerm) const
+	{
+		BString publisherName = PackageUtils::PublisherName(package);
+		return _TextContains(publisherName, searchTerm);
+	}
+
+	bool _AcceptsPackageFromLocalizedText(const PackageInfoRef& package,
+		const BString& searchTerm) const
+	{
+		if (!package.IsSet())
+			return false;
+
+		PackageLocalizedTextRef localizedText = package->LocalizedText();
+
+		if (!localizedText.IsSet())
+			return false;
+
+		return _TextContains(localizedText->Title(), searchTerm)
+        	|| _TextContains(localizedText->Summary(), searchTerm)
+        	|| _TextContains(localizedText->Description(), searchTerm);
+	}
 
 private:
  	BStringList fSearchTerms;

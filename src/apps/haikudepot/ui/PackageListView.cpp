@@ -24,6 +24,7 @@
 
 #include "LocaleUtils.h"
 #include "Logger.h"
+#include "PackageUtils.h"
 #include "RatingUtils.h"
 #include "SharedIcons.h"
 #include "WorkStatusView.h"
@@ -42,11 +43,11 @@ static const char* skPackageStatePending = B_TRANSLATE_MARK(
 
 
 inline BString
-package_state_to_string(PackageInfoRef ref)
+package_state_to_string(PackageInfoRef package)
 {
 	static BNumberFormat numberFormat;
 
-	switch (ref->State()) {
+	switch (PackageUtils::State(package)) {
 		case NONE:
 			return B_TRANSLATE(skPackageStateAvailable);
 		case INSTALLED:
@@ -58,7 +59,7 @@ package_state_to_string(PackageInfoRef ref)
 		case DOWNLOADING:
 		{
 			BString data;
-			float fraction = ref->DownloadProgress();
+			float fraction = PackageUtils::DownloadProgress(package);
 			if (numberFormat.FormatPercent(data, fraction) != B_OK) {
 				HDERROR("unable to format the percentage");
 				data = "???";
@@ -78,13 +79,24 @@ class PackageIconAndTitleField : public BStringField {
 public:
 								PackageIconAndTitleField(
 									const char* packageName,
-									const char* string);
+									const char* string,
+									bool isActivated,
+									bool isNativeDesktop);
 	virtual						~PackageIconAndTitleField();
 
 			const BString		PackageName() const
 									{ return fPackageName; }
+
+			bool				IsActivated() const
+									{ return fIsActivated; }
+
+			bool				IsNativeDesktop() const
+									{ return fIsNativeDesktop; }
+
 private:
 			const BString		fPackageName;
+			const bool			fIsActivated;
+			const bool			fIsNativeDesktop;
 };
 
 
@@ -235,11 +247,13 @@ private:
 // #pragma mark - PackageIconAndTitleField
 
 
-PackageIconAndTitleField::PackageIconAndTitleField(const char* packageName,
-	const char* string)
+PackageIconAndTitleField::PackageIconAndTitleField(const char* packageName, const char* string,
+	bool isActivated, bool isNativeDesktop)
 	:
 	Inherited(string),
-	fPackageName(packageName)
+	fPackageName(packageName),
+	fIsActivated(isActivated),
+	fIsNativeDesktop(isNativeDesktop)
 {
 }
 
@@ -390,38 +404,66 @@ PackageColumn::DrawField(BField* field, BRect rect, BView* parent)
 	RatingField* ratingField = dynamic_cast<RatingField*>(field);
 
 	if (packageIconAndTitleField != NULL) {
+
+		// TODO (andponlin) factor this out as this method is getting too large.
+
 		BSize iconSize = BControlLook::ComposeIconSize(16);
-		BRect r(BPoint(0, 0), iconSize);
+		BSize trailingIconSize = BControlLook::ComposeIconSize(8);
+		float trailingIconPaddingFactor = 0.2f;
+		BRect iconRect;
+		BRect titleRect;
+		float titleTextWidth = 0.0f;
+		float textMargin = 8.0f; // copied from ColumnTypes.cpp
 
-		// figure out the placement
-		float x = 0.0;
-		float y = rect.top + ((rect.Height() - r.Height()) / 2) - 1;
-		float width = 0.0;
+		std::vector<BitmapHolderRef> trailingIconBitmaps;
 
-		switch (Alignment()) {
-			default:
-			case B_ALIGN_LEFT:
-			case B_ALIGN_CENTER:
-				x = rect.left + sTextMargin;
-				width = rect.right - (x + r.Width()) - (2 * sTextMargin);
-				r.Set(x + r.Width(), rect.top, rect.right - width, rect.bottom);
-				break;
+		if (packageIconAndTitleField->IsActivated())
+			trailingIconBitmaps.push_back(SharedIcons::IconInstalled16Scaled());
 
-			case B_ALIGN_RIGHT:
-				x = rect.right - sTextMargin - r.Width();
-				width = (x - rect.left - (2 * sTextMargin));
-				r.Set(rect.left, rect.top, rect.left + width, rect.bottom);
-				break;
+		if (packageIconAndTitleField->IsNativeDesktop())
+			trailingIconBitmaps.push_back(SharedIcons::IconNative16Scaled());
+
+		// If there is not enough space then drop the "activated" indicator in order to make more
+		// room for the title.
+
+		float trailingIconsWidth = static_cast<float>(trailingIconBitmaps.size())
+			* (trailingIconSize.Width() * (1.0 + trailingIconPaddingFactor));
+
+		if (!trailingIconBitmaps.empty()) {
+			static float sMinimalTextPart = -1.0;
+
+			if (sMinimalTextPart < 0.0)
+				sMinimalTextPart = parent->StringWidth("M") * 5.0;
+
+			float minimalWidth
+				= iconSize.Width() + trailingIconsWidth + sTextMargin + sMinimalTextPart;
+
+			if (rect.Width() <= minimalWidth)
+				trailingIconBitmaps.clear();
 		}
 
-		if (width != packageIconAndTitleField->Width()) {
-			BString truncatedString(packageIconAndTitleField->String());
-			parent->TruncateString(&truncatedString, fTruncateMode, width + 2);
-			packageIconAndTitleField->SetClippedString(truncatedString.String());
-			packageIconAndTitleField->SetWidth(width);
-		}
+		// Calculate the location of the icon.
 
-		// draw the bitmap
+		iconRect = BRect(BPoint(rect.left + sTextMargin,
+				rect.top + ((rect.Height() - iconSize.Height()) / 2) - 1),
+			iconSize);
+
+		// Calculate the location of the title text.
+
+		titleRect = rect;
+		titleRect.left = iconRect.right;
+		titleRect.right -= trailingIconsWidth;
+
+		// Figure out if the text needs to be truncated.
+
+		float textWidth = titleRect.Width() - (2.0 * textMargin);
+		BString truncatedString(packageIconAndTitleField->String());
+		parent->TruncateString(&truncatedString, fTruncateMode, textWidth);
+		packageIconAndTitleField->SetClippedString(truncatedString.String());
+		titleTextWidth = parent->StringWidth(truncatedString);
+
+		// Draw the icon.
+
 		BitmapHolderRef bitmapHolderRef;
 		status_t bitmapResult;
 
@@ -433,15 +475,46 @@ PackageColumn::DrawField(BField* field, BRect rect, BView* parent)
 				const BBitmap* bitmap = bitmapHolderRef->Bitmap();
 				if (bitmap != NULL && bitmap->IsValid()) {
 					parent->SetDrawingMode(B_OP_ALPHA);
-					BRect viewRect(BPoint(x, y), iconSize);
-					parent->DrawBitmap(bitmap, bitmap->Bounds(), viewRect);
+					parent->DrawBitmap(bitmap, bitmap->Bounds(), iconRect,
+						B_FILTER_BITMAP_BILINEAR);
 					parent->SetDrawingMode(B_OP_OVER);
 				}
 			}
 		}
 
-		// draw the string
-		DrawString(packageIconAndTitleField->ClippedString(), parent, r);
+		// Draw the title.
+
+		DrawString(packageIconAndTitleField->ClippedString(), parent, titleRect);
+
+		// Draw the trailing icons
+
+		if (!trailingIconBitmaps.empty()) {
+
+			BRect trailingIconRect(
+				BPoint(titleRect.left + titleTextWidth + textMargin, iconRect.top),
+				trailingIconSize);
+
+			parent->SetDrawingMode(B_OP_ALPHA);
+
+			for (std::vector<BitmapHolderRef>::iterator it = trailingIconBitmaps.begin();
+					it != trailingIconBitmaps.end(); it++) {
+				const BBitmap* bitmap = (*it)->Bitmap();
+				BRect bitmapBounds = bitmap->Bounds();
+
+				BRect trailingIconAlignedRect
+					= BRect(BPoint(ceilf(trailingIconRect.LeftTop().x) + 0.5,
+						ceilf(trailingIconRect.LeftTop().y) + 0.5),
+					trailingIconRect.Size());
+
+				parent->DrawBitmap(bitmap, bitmapBounds, trailingIconAlignedRect,
+					B_FILTER_BITMAP_BILINEAR);
+
+				trailingIconRect.OffsetBy(
+					trailingIconSize.Width() * (1.0 + trailingIconPaddingFactor), 0);
+			}
+
+			parent->SetDrawingMode(B_OP_OVER);
+		}
 
 	} else if (stringField != NULL) {
 
@@ -630,8 +703,13 @@ PackageRow::UpdateIconAndTitle()
 {
 	if (!fPackage.IsSet())
 		return;
-	SetField(new PackageIconAndTitleField(
-		fPackage->Name(), fPackage->Title()), kTitleColumn);
+
+	BString title;
+	PackageUtils::TitleOrName(fPackage, title);
+
+	BField* field = new PackageIconAndTitleField(fPackage->Name(), title,
+		PackageUtils::State(fPackage) == ACTIVATED, PackageUtils::IsNativeDesktop(fPackage));
+	SetField(field, kTitleColumn);
 }
 
 
@@ -650,8 +728,11 @@ PackageRow::UpdateSummary()
 {
 	if (!fPackage.IsSet())
 		return;
-	SetField(new BStringField(fPackage->ShortDescription()),
-		kDescriptionColumn);
+
+	BString summary;
+	PackageUtils::Summary(fPackage, summary);
+	// TODO; `kDescriptionColumn` seems wrong here?
+	SetField(new BStringField(summary), kDescriptionColumn);
 }
 
 
@@ -663,12 +744,15 @@ PackageRow::UpdateRating()
 
 	UserRatingInfoRef userRatingInfo = fPackage->UserRatingInfo();
 	UserRatingSummaryRef userRatingSummary;
+	float averageRating = RATING_MISSING;
 
 	if (userRatingInfo.IsSet())
 		userRatingSummary = userRatingInfo->Summary();
 
 	if (userRatingSummary.IsSet())
-		SetField(new RatingField(userRatingSummary->AverageRating()), kRatingColumn);
+		averageRating = userRatingSummary->AverageRating();
+
+	SetField(new RatingField(averageRating), kRatingColumn);
 }
 
 
@@ -677,35 +761,35 @@ PackageRow::UpdateSize()
 {
 	if (!fPackage.IsSet())
 		return;
-	SetField(new SizeField(fPackage->Size()), kSizeColumn);
+	SetField(new SizeField(PackageUtils::Size(fPackage)), kSizeColumn);
 }
 
 
 void
 PackageRow::UpdateRepository()
 {
-	if (!fPackage.IsSet())
-		return;
-	SetField(new BStringField(fPackage->DepotName()), kRepositoryColumn);
+	BString depotName = PackageUtils::DepotName(fPackage);
+	SetField(new BStringField(depotName), kRepositoryColumn);
 }
 
 
 void
 PackageRow::UpdateVersion()
 {
-	if (!fPackage.IsSet())
-		return;
-	SetField(new BStringField(fPackage->Version().ToString()), kVersionColumn);
+	PackageVersionRef version = PackageUtils::Version(fPackage);
+	BString versionString;
+	if (version.IsSet())
+		versionString = version->ToString();
+	SetField(new BStringField(versionString), kVersionColumn);
 }
 
 
 void
 PackageRow::UpdateVersionCreateTimestamp()
 {
-	if (!fPackage.IsSet())
-		return;
-	SetField(new DateField(fPackage->VersionCreateTimestamp()),
-		kVersionCreateTimestampColumn);
+	PackageVersionRef version = PackageUtils::Version(fPackage);
+	if (version.IsSet())
+		SetField(new DateField(version->CreateTimestamp()), kVersionCreateTimestampColumn);
 }
 
 
@@ -926,27 +1010,23 @@ PackageListView::MessageReceived(BMessage* message)
 				|| message->FindUInt32("changes", &changes) != B_OK) {
 				break;
 			}
-
 			BAutolock _(fModel->Lock());
 			PackageRow* row = _FindRow(name);
 			if (row != NULL) {
-				if ((changes & PKG_CHANGED_TITLE) != 0)
+				if ((changes & PKG_CHANGED_LOCALIZED_TEXT) != 0
+					|| (changes & PKG_CHANGED_LOCAL_INFO) != 0) {
 					row->UpdateIconAndTitle();
-				if ((changes & PKG_CHANGED_SUMMARY) != 0)
 					row->UpdateSummary();
+				}
 				if ((changes & PKG_CHANGED_RATINGS) != 0)
 					row->UpdateRating();
-				if ((changes & PKG_CHANGED_STATE) != 0)
+				if ((changes & PKG_CHANGED_LOCAL_INFO) != 0) {
 					row->UpdateState();
-				if ((changes & PKG_CHANGED_SIZE) != 0)
 					row->UpdateSize();
+				}
 				if ((changes & PKG_CHANGED_ICON) != 0)
 					row->UpdateIconAndTitle();
-				if ((changes & PKG_CHANGED_DEPOT) != 0)
-					row->UpdateRepository();
-				if ((changes & PKG_CHANGED_VERSION) != 0)
-					row->UpdateVersion();
-				if ((changes & PKG_CHANGED_VERSION_CREATE_TIMESTAMP) != 0)
+				if ((changes & PKG_CHANGED_CORE_INFO) != 0)
 					row->UpdateVersionCreateTimestamp();
 			}
 			break;

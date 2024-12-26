@@ -291,7 +291,7 @@ struct VnodeHash {
 
 	ValueType*& GetLink(ValueType* value) const
 	{
-		return value->next;
+		return value->hash_next;
 	}
 };
 
@@ -424,7 +424,7 @@ static status_t dir_vnode_to_path(struct vnode* vnode, char* buffer,
 	size_t bufferSize, bool kernel);
 static status_t fd_and_path_to_vnode(int fd, char* path, bool traverseLeafLink,
 	VnodePutter& _vnode, ino_t* _parentID, bool kernel);
-static void inc_vnode_ref_count(struct vnode* vnode);
+static int32 inc_vnode_ref_count(struct vnode* vnode);
 static status_t dec_vnode_ref_count(struct vnode* vnode, bool alwaysFree,
 	bool reenter);
 static inline void put_vnode(struct vnode* vnode);
@@ -733,7 +733,7 @@ get_mount(dev_t id, struct fs_mount** _mount)
 
 	struct vnode* rootNode = mount->root_vnode;
 	if (mount->unmounting || rootNode == NULL || rootNode->IsBusy()
-		|| rootNode->ref_count == 0) {
+			|| rootNode->ref_count == 0) {
 		// might have been called during a mount/unmount operation
 		return B_BUSY;
 	}
@@ -998,9 +998,10 @@ free_vnode(struct vnode* vnode, bool reenter)
 	// file_cache_create()), so that this vnode's ref count has the chance to
 	// ever drop to 0. Deleting the file cache now, will cause the next to last
 	// cache reference to be released, which will also release a (no longer
-	// existing) vnode reference. To avoid problems, we set the vnode's ref
-	// count, so that it will neither become negative nor 0.
-	vnode->ref_count = 2;
+	// existing) vnode reference. To ensure that will be ignored, and that no
+	// other consumers will acquire this vnode in the meantime, we make the
+	// vnode's ref count negative.
+	vnode->ref_count = -1;
 
 	if (!vnode->IsUnpublished()) {
 		if (vnode->IsRemoved())
@@ -1055,8 +1056,7 @@ dec_vnode_ref_count(struct vnode* vnode, bool alwaysFree, bool reenter)
 	ReadLocker locker(sVnodeLock);
 	AutoLocker<Vnode> nodeLocker(vnode);
 
-	int32 oldRefCount = atomic_add(&vnode->ref_count, -1);
-
+	const int32 oldRefCount = atomic_add(&vnode->ref_count, -1);
 	ASSERT_PRINT(oldRefCount > 0, "vnode %p\n", vnode);
 
 	TRACE(("dec_vnode_ref_count: vnode %p, ref now %" B_PRId32 "\n", vnode,
@@ -1107,13 +1107,16 @@ dec_vnode_ref_count(struct vnode* vnode, bool alwaysFree, bool reenter)
 	node.
 
 	\param vnode the vnode.
+	\returns the old reference count.
 */
-static void
+static int32
 inc_vnode_ref_count(struct vnode* vnode)
 {
-	atomic_add(&vnode->ref_count, 1);
+	const int32 oldCount = atomic_add(&vnode->ref_count, 1);
 	TRACE(("inc_vnode_ref_count: vnode %p, ref now %" B_PRId32 "\n", vnode,
-		vnode->ref_count));
+		oldCount + 1));
+	ASSERT(oldCount >= 0);
+	return oldCount;
 }
 
 
@@ -1161,9 +1164,23 @@ get_vnode(dev_t mountID, ino_t vnodeID, struct vnode** _vnode, bool canWait,
 	int32 tries = BUSY_VNODE_RETRIES;
 restart:
 	struct vnode* vnode = lookup_vnode(mountID, vnodeID);
+
+	if (vnode != NULL && !vnode->IsBusy()) {
+		// Try to increment the vnode's reference count without locking.
+		// (We can't use atomic_add here, as if the vnode is unused,
+		// we need to hold its lock to mark it used again.)
+		const int32 oldRefCount = atomic_get(&vnode->ref_count);
+		if (oldRefCount > 0 && atomic_test_and_set(&vnode->ref_count,
+				oldRefCount + 1, oldRefCount) == oldRefCount) {
+			rw_lock_read_unlock(&sVnodeLock);
+			*_vnode = vnode;
+			return B_OK;
+		}
+	}
+
 	AutoLocker<Vnode> nodeLocker(vnode);
 
-	if (vnode && vnode->IsBusy()) {
+	if (vnode != NULL && vnode->IsBusy()) {
 		// vnodes in the Removed state (except ones still Unpublished)
 		// which are also Busy will disappear soon, so we do not wait for them.
 		const bool doNotWait = vnode->IsRemoved() && !vnode->IsUnpublished();
@@ -1184,14 +1201,11 @@ restart:
 
 	TRACE(("get_vnode: tried to lookup vnode, got %p\n", vnode));
 
-	status_t status;
-
-	if (vnode) {
-		if (vnode->ref_count == 0) {
+	if (vnode != NULL) {
+		if (inc_vnode_ref_count(vnode) == 0) {
 			// this vnode has been unused before
 			vnode_used(vnode);
 		}
-		inc_vnode_ref_count(vnode);
 
 		nodeLocker.Unlock();
 		rw_lock_read_unlock(&sVnodeLock);
@@ -1200,7 +1214,7 @@ restart:
 		rw_lock_read_unlock(&sVnodeLock);
 			// unlock -- create_new_vnode_and_lock() write-locks on success
 		bool nodeCreated;
-		status = create_new_vnode_and_lock(mountID, vnodeID, vnode,
+		status_t status = create_new_vnode_and_lock(mountID, vnodeID, vnode,
 			nodeCreated);
 		if (status != B_OK)
 			return status;
@@ -1294,7 +1308,8 @@ free_unused_vnodes(int32 level)
 	// determine how many nodes to free
 	uint32 count = 1;
 	{
-		MutexLocker unusedVnodesLocker(sUnusedVnodesLock);
+		ReadLocker hotVnodesReadLocker(sHotVnodesLock);
+		InterruptsSpinLocker unusedVnodesLocker(sUnusedVnodesLock);
 
 		switch (level) {
 			case B_LOW_RESOURCE_NOTE:
@@ -1316,11 +1331,11 @@ free_unused_vnodes(int32 level)
 
 	for (uint32 i = 0; i < count; i++) {
 		ReadLocker vnodesReadLocker(sVnodeLock);
+		ReadLocker hotVnodesReadLocker(sHotVnodesLock);
 
 		// get the first node
-		MutexLocker unusedVnodesLocker(sUnusedVnodesLock);
-		struct vnode* vnode = (struct vnode*)list_get_first_item(
-			&sUnusedVnodeList);
+		InterruptsSpinLocker unusedVnodesLocker(sUnusedVnodesLock);
+		struct vnode* vnode = sUnusedVnodeList.First();
 		unusedVnodesLocker.Unlock();
 
 		if (vnode == NULL)
@@ -1336,8 +1351,10 @@ free_unused_vnodes(int32 level)
 		// has been touched in the meantime, i.e. it is no longer the least
 		// recently used unused vnode and we rather don't free it.
 		unusedVnodesLocker.Lock();
-		if (vnode != list_get_first_item(&sUnusedVnodeList))
+		if (vnode != sUnusedVnodeList.First()) {
+			unusedVnodesLocker.Unlock();
 			continue;
+		}
 		unusedVnodesLocker.Unlock();
 
 		ASSERT(!vnode->IsBusy());
@@ -1348,6 +1365,7 @@ free_unused_vnodes(int32 level)
 
 		// write back changes and free the node
 		nodeLocker.Unlock();
+		hotVnodesReadLocker.Unlock();
 		vnodesReadLocker.Unlock();
 
 		if (vnode->cache != NULL)
@@ -1931,7 +1949,7 @@ disconnect_mount_or_vnode_fds(struct fs_mount* mount,
 		io_context* context = team->io_context;
 		if (context == NULL)
 			continue;
-		MutexLocker contextLocker(context->io_mutex);
+		WriteLocker contextLocker(context->lock);
 
 		teamLocker.Unlock();
 
@@ -2152,8 +2170,6 @@ vnode_path_to_vnode(struct vnode* start, char* path, bool traverseLeafLink,
 	status_t status = B_OK;
 	ino_t lastParentID = vnode->id;
 	while (true) {
-		char* nextPath;
-
 		TRACE(("vnode_path_to_vnode: top of loop. p = %p, p = '%s'\n", path,
 			path));
 
@@ -2163,16 +2179,17 @@ vnode_path_to_vnode(struct vnode* start, char* path, bool traverseLeafLink,
 
 		// walk to find the next path component ("path" will point to a single
 		// path component), and filter out multiple slashes
-		for (nextPath = path + 1; *nextPath != '\0' && *nextPath != '/';
-				nextPath++);
+		char* nextPath = path + 1;
+		while (*nextPath != '\0' && *nextPath != '/')
+			nextPath++;
 
 		bool directoryFound = false;
 		if (*nextPath == '/') {
 			directoryFound = true;
 			*nextPath = '\0';
-			do
+			do {
 				nextPath++;
-			while (*nextPath == '/');
+			} while (*nextPath == '/');
 		}
 
 		// See if the '..' is at a covering vnode move to the covered
@@ -2209,27 +2226,22 @@ vnode_path_to_vnode(struct vnode* start, char* path, bool traverseLeafLink,
 		}
 
 		if (status != B_OK) {
-			if (leafName != NULL) {
+			if (leafName != NULL && !directoryFound) {
 				strlcpy(leafName, path, B_FILE_NAME_LENGTH);
 				_vnode.SetTo(vnode.Detach());
 			}
 			return status;
 		}
 
-		// If the new node is a symbolic link, resolve it (if we've been told
-		// to do it)
-		if (S_ISLNK(nextVnode->Type())
-			&& (traverseLeafLink || directoryFound)) {
-			size_t bufferSize;
-			char* buffer;
-
+		// If the new node is a symbolic link, resolve it (if we've been told to)
+		if (S_ISLNK(nextVnode->Type()) && (traverseLeafLink || directoryFound)) {
 			TRACE(("traverse link\n"));
 
-			if (count + 1 > B_MAX_SYMLINKS)
+			if ((count + 1) > B_MAX_SYMLINKS)
 				return B_LINK_LIMIT;
 
-			bufferSize = B_PATH_NAME_LENGTH;
-			buffer = (char*)object_cache_alloc(sPathNameCache, 0);
+			size_t bufferSize = B_PATH_NAME_LENGTH;
+			char* buffer = (char*)object_cache_alloc(sPathNameCache, 0);
 			if (buffer == NULL)
 				return B_NO_MEMORY;
 
@@ -2287,8 +2299,9 @@ vnode_path_to_vnode(struct vnode* start, char* path, bool traverseLeafLink,
 					_vnode.SetTo(nextVnode.Detach());
 				return status;
 			}
-		} else
+		} else {
 			lastParentID = vnode->id;
+		}
 
 		// decrease the ref count on the old dir we just looked up into
 		vnode.Unset();
@@ -2302,7 +2315,7 @@ vnode_path_to_vnode(struct vnode* start, char* path, bool traverseLeafLink,
 	}
 
 	_vnode.SetTo(vnode.Detach());
-	if (_parentID)
+	if (_parentID != NULL)
 		*_parentID = lastParentID;
 
 	return B_OK;
@@ -2347,15 +2360,14 @@ path_to_vnode(char* path, bool traverseLink, VnodePutter& _vnode,
 			_vnode.SetTo(start);
 			return B_OK;
 		}
-
 	} else {
-		struct io_context* context = get_current_io_context(kernel);
+		const struct io_context* context = get_current_io_context(kernel);
 
-		mutex_lock(&context->io_mutex);
+		rw_lock_read_lock(&context->lock);
 		start = context->cwd;
 		if (start != NULL)
 			inc_vnode_ref_count(start);
-		mutex_unlock(&context->io_mutex);
+		rw_lock_read_unlock(&context->lock);
 
 		if (start == NULL)
 			return B_ERROR;
@@ -2823,12 +2835,14 @@ get_new_fd(struct fd_ops* ops, struct fs_mount* mount, struct vnode* vnode,
 
 	// If the vnode is locked, we don't allow creating a new file/directory
 	// file_descriptor for it
-	if (vnode && vnode->mandatory_locked_by != NULL
-		&& (ops == &sFileOps || ops == &sDirectoryOps))
+	if (vnode != NULL && vnode->mandatory_locked_by != NULL
+			&& (ops == &sFileOps || ops == &sDirectoryOps))
 		return B_BUSY;
 
 	if ((openMode & O_RDWR) != 0 && (openMode & O_WRONLY) != 0)
 		return B_BAD_VALUE;
+	if ((openMode & O_RWMASK) == O_RDONLY && (openMode & O_TRUNC) != 0)
+		return B_NOT_ALLOWED;
 
 	descriptor = alloc_fd();
 	if (!descriptor)
@@ -2867,9 +2881,9 @@ get_new_fd(struct fd_ops* ops, struct fs_mount* mount, struct vnode* vnode,
 		return B_NO_MORE_FDS;
 	}
 
-	mutex_lock(&context->io_mutex);
+	rw_lock_write_lock(&context->lock);
 	fd_set_close_on_exec(context, fd, (openMode & O_CLOEXEC) != 0);
-	mutex_unlock(&context->io_mutex);
+	rw_lock_write_unlock(&context->lock);
 
 	return fd;
 }
@@ -3623,8 +3637,6 @@ is_user_in_group(gid_t gid)
 static status_t
 free_io_context(io_context* context)
 {
-	uint32 i;
-
 	TIOC(FreeIOContext(context));
 
 	if (context->root)
@@ -3633,16 +3645,16 @@ free_io_context(io_context* context)
 	if (context->cwd)
 		put_vnode(context->cwd);
 
-	mutex_lock(&context->io_mutex);
+	rw_lock_write_lock(&context->lock);
 
-	for (i = 0; i < context->table_size; i++) {
+	for (uint32 i = 0; i < context->table_size; i++) {
 		if (struct file_descriptor* descriptor = context->fds[i]) {
 			close_fd(context, descriptor);
 			put_fd(descriptor);
 		}
 	}
 
-	mutex_destroy(&context->io_mutex);
+	rw_lock_destroy(&context->lock);
 
 	remove_node_monitors(context);
 	free(context->fds);
@@ -3655,22 +3667,16 @@ free_io_context(io_context* context)
 static status_t
 resize_monitor_table(struct io_context* context, const int newSize)
 {
-	int	status = B_OK;
-
 	if (newSize <= 0 || newSize > MAX_NODE_MONITORS)
 		return B_BAD_VALUE;
 
-	mutex_lock(&context->io_mutex);
+	WriteLocker locker(context->lock);
 
-	if ((size_t)newSize < context->num_monitors) {
-		status = B_BUSY;
-		goto out;
-	}
+	if ((size_t)newSize < context->num_monitors)
+		return B_BUSY;
+
 	context->max_monitors = newSize;
-
-out:
-	mutex_unlock(&context->io_mutex);
-	return status;
+	return B_OK;
 }
 
 
@@ -4575,19 +4581,15 @@ extern "C" status_t
 vfs_get_cwd(dev_t* _mountID, ino_t* _vnodeID)
 {
 	// Get current working directory from io context
-	struct io_context* context = get_current_io_context(false);
-	status_t status = B_OK;
+	const struct io_context* context = get_current_io_context(false);
 
-	mutex_lock(&context->io_mutex);
+	ReadLocker locker(context->lock);
+	if (context->cwd == NULL)
+		return B_ERROR;
 
-	if (context->cwd != NULL) {
-		*_mountID = context->cwd->device;
-		*_vnodeID = context->cwd->id;
-	} else
-		status = B_ERROR;
-
-	mutex_unlock(&context->io_mutex);
-	return status;
+	*_mountID = context->cwd->device;
+	*_vnodeID = context->cwd->id;
+	return B_OK;
 }
 
 
@@ -4895,10 +4897,8 @@ vfs_release_posix_lock(io_context* context, struct file_descriptor* descriptor)
 void
 vfs_exec_io_context(io_context* context)
 {
-	uint32 i;
-
-	for (i = 0; i < context->table_size; i++) {
-		mutex_lock(&context->io_mutex);
+	for (uint32 i = 0; i < context->table_size; i++) {
+		rw_lock_write_lock(&context->lock);
 
 		struct file_descriptor* descriptor = context->fds[i];
 		bool remove = false;
@@ -4910,7 +4910,7 @@ vfs_exec_io_context(io_context* context)
 			remove = true;
 		}
 
-		mutex_unlock(&context->io_mutex);
+		rw_lock_write_unlock(&context->lock);
 
 		if (remove) {
 			close_fd(context, descriptor);
@@ -4924,7 +4924,7 @@ vfs_exec_io_context(io_context* context)
 	of the parent io_control if it is given.
 */
 io_context*
-vfs_new_io_context(io_context* parentContext, bool purgeCloseOnExec)
+vfs_new_io_context(const io_context* parentContext, bool purgeCloseOnExec)
 {
 	io_context* context = (io_context*)malloc(sizeof(io_context));
 	if (context == NULL)
@@ -4935,11 +4935,11 @@ vfs_new_io_context(io_context* parentContext, bool purgeCloseOnExec)
 	memset(context, 0, sizeof(io_context));
 	context->ref_count = 1;
 
-	MutexLocker parentLocker;
+	ReadLocker parentLocker;
 
 	size_t tableSize;
 	if (parentContext != NULL) {
-		parentLocker.SetTo(parentContext->io_mutex, false);
+		parentLocker.SetTo(parentContext->lock, false);
 		tableSize = parentContext->table_size;
 	} else
 		tableSize = DEFAULT_FD_TABLE_SIZE;
@@ -4961,13 +4961,11 @@ vfs_new_io_context(io_context* parentContext, bool purgeCloseOnExec)
 		+ sizeof(struct select_info**) * tableSize
 		+ (tableSize + 7) / 8);
 
-	mutex_init(&context->io_mutex, "I/O context");
+	rw_lock_init(&context->lock, "I/O context");
 
 	// Copy all parent file descriptors
 
 	if (parentContext != NULL) {
-		size_t i;
-
 		mutex_lock(&sIOContextRootLock);
 		context->root = parentContext->root;
 		if (context->root)
@@ -4979,12 +4977,12 @@ vfs_new_io_context(io_context* parentContext, bool purgeCloseOnExec)
 			inc_vnode_ref_count(context->cwd);
 
 		if (parentContext->inherit_fds) {
-			for (i = 0; i < tableSize; i++) {
+			for (size_t i = 0; i < tableSize; i++) {
 				struct file_descriptor* descriptor = parentContext->fds[i];
 
 				if (descriptor != NULL
-					&& (descriptor->open_mode & O_DISCONNECTED) == 0) {
-					bool closeOnExec = fd_close_on_exec(parentContext, i);
+						&& (descriptor->open_mode & O_DISCONNECTED) == 0) {
+					const bool closeOnExec = fd_close_on_exec(parentContext, i);
 					if (closeOnExec && purgeCloseOnExec)
 						continue;
 
@@ -5046,7 +5044,7 @@ vfs_resize_fd_table(struct io_context* context, uint32 newSize)
 
 	TIOC(ResizeIOContext(context, newSize));
 
-	MutexLocker _(context->io_mutex);
+	WriteLocker locker(context->lock);
 
 	uint32 oldSize = context->table_size;
 	int oldCloseOnExitBitmapSize = (oldSize + 7) / 8;
@@ -5216,7 +5214,7 @@ vfs_getrlimit(int resource, struct rlimit* rlp)
 		case RLIMIT_NOFILE:
 		{
 			struct io_context* context = get_current_io_context(false);
-			MutexLocker _(context->io_mutex);
+			ReadLocker _(context->lock);
 
 			rlp->rlim_cur = context->table_size;
 			rlp->rlim_max = MAX_FD_TABLE_SIZE;
@@ -5226,7 +5224,7 @@ vfs_getrlimit(int resource, struct rlimit* rlp)
 		case RLIMIT_NOVMON:
 		{
 			struct io_context* context = get_current_io_context(false);
-			MutexLocker _(context->io_mutex);
+			ReadLocker _(context->lock);
 
 			rlp->rlim_cur = context->max_monitors;
 			rlp->rlim_max = MAX_NODE_MONITORS;
@@ -5279,17 +5277,13 @@ vfs_init(kernel_args* args)
 	if (sVnodeTable == NULL || sVnodeTable->Init(VNODE_HASH_TABLE_SIZE) != B_OK)
 		panic("vfs_init: error creating vnode hash table\n");
 
-	struct vnode dummy_vnode;
-	list_init_etc(&sUnusedVnodeList, offset_of_member(dummy_vnode, unused_link));
-
-	struct fs_mount dummyMount;
 	sMountsTable = new(std::nothrow) MountTable();
 	if (sMountsTable == NULL
 			|| sMountsTable->Init(MOUNTS_HASH_TABLE_SIZE) != B_OK)
 		panic("vfs_init: error creating mounts hash table\n");
 
 	sPathNameCache = create_object_cache("vfs path names",
-		B_PATH_NAME_LENGTH + 1, 8, NULL, NULL, NULL);
+		B_PATH_NAME_LENGTH, 8, NULL, NULL, NULL);
 	if (sPathNameCache == NULL)
 		panic("vfs_init: error creating path name object_cache\n");
 
@@ -5423,16 +5417,16 @@ create_vnode(struct vnode* directory, const char* name, int openMode,
 				status = vnode_path_to_vnode(directory, clonedName, true,
 					kernel, vnode, NULL, clonedName);
 				if (status != B_OK) {
+					if (status != B_ENTRY_NOT_FOUND || !vnode.IsSet())
+						return status;
+
 					// vnode is not found, but maybe it has a parent and we can create it from
 					// there. In that case, vnode_path_to_vnode has set vnode to the latest
-					// directory found in the path
-					if (status == B_ENTRY_NOT_FOUND) {
-						directory = vnode.Detach();
-						dirPutter.SetTo(directory);
-						name = clonedName;
-						create = true;
-					} else
-						return status;
+					// directory found in the path.
+					directory = vnode.Detach();
+					dirPutter.SetTo(directory);
+					name = clonedName;
+					create = true;
 				}
 			}
 
@@ -5456,10 +5450,8 @@ create_vnode(struct vnode* directory, const char* name, int openMode,
 
 		status = FS_CALL(directory, create, name, openMode | O_EXCL, perms,
 			&cookie, &newID);
-		if (status != B_OK
-			&& ((openMode & O_EXCL) != 0 || status != B_FILE_EXISTS)) {
+		if (status != B_OK && ((openMode & O_EXCL) != 0 || status != B_FILE_EXISTS))
 			return status;
-		}
 	}
 
 	if (status != B_OK)
@@ -6241,9 +6233,9 @@ common_fcntl(int fd, int op, size_t argument, bool kernel)
 			// Set file descriptor flags
 
 			// O_CLOEXEC is the only flag available at this time
-			mutex_lock(&context->io_mutex);
+			rw_lock_write_lock(&context->lock);
 			fd_set_close_on_exec(context, fd, (argument & FD_CLOEXEC) != 0);
-			mutex_unlock(&context->io_mutex);
+			rw_lock_write_unlock(&context->lock);
 
 			status = B_OK;
 			break;
@@ -6252,9 +6244,9 @@ common_fcntl(int fd, int op, size_t argument, bool kernel)
 		case F_GETFD:
 		{
 			// Get file descriptor flags
-			mutex_lock(&context->io_mutex);
+			rw_lock_read_lock(&context->lock);
 			status = fd_close_on_exec(context, fd) ? FD_CLOEXEC : 0;
-			mutex_unlock(&context->io_mutex);
+			rw_lock_read_unlock(&context->lock);
 			break;
 		}
 
@@ -6293,9 +6285,9 @@ common_fcntl(int fd, int op, size_t argument, bool kernel)
 		{
 			status = new_fd_etc(context, descriptor.Get(), (int)argument);
 			if (status >= 0) {
-				mutex_lock(&context->io_mutex);
+				rw_lock_write_lock(&context->lock);
 				fd_set_close_on_exec(context, status, op == F_DUPFD_CLOEXEC);
-				mutex_unlock(&context->io_mutex);
+				rw_lock_write_unlock(&context->lock);
 
 				atomic_add(&descriptor->ref_count, 1);
 			}
@@ -7680,9 +7672,8 @@ fs_mount(char* path, const char* device, const char* fsName, uint32 flags,
 		inc_vnode_ref_count(sRoot);
 	}
 
-	// supply the partition (if any) with the mount cookie and mark it mounted
+	// supply the partition (if any) with the mount ID and mark it mounted
 	if (partition) {
-		partition->SetMountCookie(mount->volume->private_volume);
 		partition->SetVolumeID(mount->id);
 
 		// keep a partition reference as long as the partition is mounted
@@ -7925,7 +7916,6 @@ fs_unmount(char* path, dev_t mountID, uint32 flags, bool kernel)
 	// dereference the partition and mark it unmounted
 	if (partition) {
 		partition->SetVolumeID(-1);
-		partition->SetMountCookie(NULL);
 
 		if (mount->owns_file_device)
 			KDiskDeviceManager::Default()->DeleteFileDevice(partition->ID());
@@ -7994,11 +7984,10 @@ fs_sync(dev_t device)
 		if (vnode == NULL || vnode->IsBusy())
 			continue;
 
-		if (vnode->ref_count == 0) {
+		if (inc_vnode_ref_count(vnode) == 0) {
 			// this vnode has been unused before
 			vnode_used(vnode);
 		}
-		inc_vnode_ref_count(vnode);
 
 		locker.Unlock();
 
@@ -8128,25 +8117,23 @@ fs_read_attr(int fd, const char *attribute, uint32 type, off_t pos,
 static status_t
 get_cwd(char* buffer, size_t size, bool kernel)
 {
-	// Get current working directory from io context
-	struct io_context* context = get_current_io_context(kernel);
-	status_t status;
-
 	FUNCTION(("vfs_get_cwd: buf %p, size %ld\n", buffer, size));
 
-	mutex_lock(&context->io_mutex);
+	// Get current working directory from io context
+	const struct io_context* context = get_current_io_context(kernel);
+	rw_lock_read_lock(&context->lock);
 
 	struct vnode* vnode = context->cwd;
-	if (vnode)
+	if (vnode != NULL)
 		inc_vnode_ref_count(vnode);
 
-	mutex_unlock(&context->io_mutex);
+	rw_lock_read_unlock(&context->lock);
 
-	if (vnode) {
-		status = dir_vnode_to_path(vnode, buffer, size, kernel);
-		put_vnode(vnode);
-	} else
-		status = B_ERROR;
+	if (vnode == NULL)
+		return B_ERROR;
+
+	status_t status = dir_vnode_to_path(vnode, buffer, size, kernel);
+	put_vnode(vnode);
 
 	return status;
 }
@@ -8180,13 +8167,13 @@ set_cwd(int fd, char* path, bool kernel)
 
 	// Get current io context and lock
 	context = get_current_io_context(kernel);
-	mutex_lock(&context->io_mutex);
+	rw_lock_write_lock(&context->lock);
 
 	// save the old current working directory first
 	oldDirectory = context->cwd;
 	context->cwd = vnode.Detach();
 
-	mutex_unlock(&context->io_mutex);
+	rw_lock_write_unlock(&context->lock);
 
 	if (oldDirectory)
 		put_vnode(oldDirectory);
@@ -8292,14 +8279,14 @@ _kern_get_next_fd_info(team_id teamID, uint32* _cookie, fd_info* info,
 	BReference<Team> teamReference(team, true);
 
 	// now that we have a team reference, its I/O context won't go away
-	io_context* context = team->io_context;
-	MutexLocker contextLocker(context->io_mutex);
+	const io_context* context = team->io_context;
+	ReadLocker contextLocker(context->lock);
 
 	uint32 slot = *_cookie;
 
 	struct file_descriptor* descriptor;
 	while (slot < context->table_size
-		&& (descriptor = context->fds[slot]) == NULL) {
+			&& (descriptor = context->fds[slot]) == NULL) {
 		slot++;
 	}
 
@@ -9579,8 +9566,12 @@ _user_create_fifo(int fd, const char* userPath, mode_t perms)
 
 
 status_t
-_user_create_pipe(int* userFDs)
+_user_create_pipe(int* userFDs, int flags)
 {
+	// check acceptable flags
+	if ((flags & ~(O_NONBLOCK | O_CLOEXEC)) != 0)
+		return B_BAD_VALUE;
+
 	// rootfs should support creating FIFOs, but let's be sure
 	if (!HAS_FS_CALL(sRoot, create_special_node))
 		return B_UNSUPPORTED;
@@ -9606,10 +9597,11 @@ _user_create_pipe(int* userFDs)
 	// Everything looks good so far. Open two FDs for reading respectively
 	// writing, O_NONBLOCK to avoid blocking on open with O_RDONLY
 	int fds[2];
-	fds[0] = open_vnode(vnode, O_RDONLY | O_NONBLOCK, false);
-	fds[1] = open_vnode(vnode, O_WRONLY, false);
-	// Reset O_NONBLOCK
-	common_fcntl(fds[0], F_SETFL, 0, false);
+	fds[0] = open_vnode(vnode, O_RDONLY | O_NONBLOCK | flags, false);
+	fds[1] = open_vnode(vnode, O_WRONLY | flags, false);
+	// Reset O_NONBLOCK if requested
+	if ((flags & O_NONBLOCK) == 0)
+		common_fcntl(fds[0], F_SETFL, flags & O_NONBLOCK, false);
 
 	FDCloser closer0(fds[0], false);
 	FDCloser closer1(fds[1], false);

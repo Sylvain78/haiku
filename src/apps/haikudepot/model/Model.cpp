@@ -25,8 +25,9 @@
 #include <Path.h>
 
 #include "HaikuDepotConstants.h"
-#include "Logger.h"
 #include "LocaleUtils.h"
+#include "Logger.h"
+#include "PackageUtils.h"
 #include "StorageUtils.h"
 
 
@@ -183,6 +184,9 @@ Model::HasDepot(const BString& name) const
 const DepotInfoRef
 Model::DepotForName(const BString& name) const
 {
+	if (name.IsEmpty())
+		return DepotInfoRef();
+
 	std::vector<DepotInfoRef>::const_iterator it;
 	for (it = fDepots.begin(); it != fDepots.end(); it++) {
 		DepotInfoRef aDepot = *it;
@@ -237,14 +241,18 @@ Model::SetStateForPackagesByName(BStringList& packageNames, PackageState state)
 		PackageInfoRef packageInfo = PackageForName(packageName);
 
 		if (packageInfo.IsSet()) {
-			packageInfo->SetState(state);
-			HDINFO("did update package [%s] with state [%s]",
-				packageName.String(), package_state_to_string(state));
+			// TODO; make this immutable
+
+			PackageLocalInfoRef localInfo = PackageUtils::NewLocalInfo(packageInfo);
+			localInfo->SetState(state);
+			packageInfo->SetLocalInfo(localInfo);
+
+			HDINFO("did update package [%s] with state [%s]", packageName.String(),
+				PackageUtils::StateToString(state));
 		}
 		else {
-			HDINFO("was unable to find package [%s] so was not possible to set"
-				" the state to [%s]", packageName.String(),
-				package_state_to_string(state));
+			HDINFO("was unable to find package [%s] so was not possible to set the state to [%s]",
+				packageName.String(), PackageUtils::StateToString(state));
 		}
 	}
 }
@@ -275,14 +283,10 @@ Model::SetCanShareAnonymousUsageData(bool value)
 bool
 Model::CanPopulatePackage(const PackageInfoRef& package)
 {
-	const BString& depotName = package->DepotName();
-
-	if (depotName.IsEmpty())
-		return false;
-
+	const BString depotName = PackageUtils::DepotName(package);
 	const DepotInfoRef& depot = DepotForName(depotName);
 
-	if (depot.Get() == NULL)
+	if (!depot.IsSet())
 		return false;
 
 	return !depot->WebAppRepositoryCode().IsEmpty();

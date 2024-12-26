@@ -42,6 +42,7 @@
 #include "PackageInfoView.h"
 #include "PackageListView.h"
 #include "PackageManager.h"
+#include "PackageUtils.h"
 #include "ProcessCoordinator.h"
 #include "ProcessCoordinatorFactory.h"
 #include "RatePackageWindow.h"
@@ -289,10 +290,7 @@ MainWindow::MainWindow(const BMessage& settings, PackageInfoRef& package)
 	fSinglePackageMode(true),
 	fIncrementViewCounterDelayedRunner(NULL)
 {
-	BString title = B_TRANSLATE("HaikuDepot - %PackageName% %PackageVersion%");
-	title.ReplaceAll("%PackageName%", package->Name());
-	title.ReplaceAll("%PackageVersion%", package->Version().ToString());
-	SetTitle(title);
+	SetTitle(_WindowTitleForPackage(package));
 
 	if ((fCoordinatorRunningSem = create_sem(1, "ProcessCoordinatorSem")) < B_OK)
 		debugger("unable to create the process coordinator semaphore");
@@ -316,7 +314,7 @@ MainWindow::MainWindow(const BMessage& settings, PackageInfoRef& package)
 
 	// add the single package into the model so that any internal
 	// business logic is able to find the package.
-	DepotInfoRef depot(new DepotInfo("single-pkg-depot"), true);
+	DepotInfoRef depot(new DepotInfo(SINGLE_PACKAGE_DEPOT_NAME), true);
 	depot->AddPackage(package);
 	fModel.MergeOrAddDepot(depot);
 
@@ -720,7 +718,7 @@ MainWindow::Consume(ProcessCoordinator *item)
 void
 MainWindow::PackageChanged(const PackageInfoEvent& event)
 {
-	uint32 watchedChanges = PKG_CHANGED_STATE | PKG_CHANGED_CLASSIFICATION;
+	uint32 watchedChanges = PKG_CHANGED_LOCAL_INFO | PKG_CHANGED_CLASSIFICATION;
 	if ((event.Changes() & watchedChanges) != 0) {
 		PackageInfoRef ref(event.Package());
 		BMessage message(MSG_PACKAGE_CHANGED);
@@ -1051,8 +1049,10 @@ MainWindow::_IncrementViewCounter(const PackageInfoRef package)
 	{
 		AutoLocker<BLocker> modelLocker(fModel.Lock());
 		bool canShareAnonymousUsageData = fModel.CanShareAnonymousUsageData();
-		if (canShareAnonymousUsageData && !package->Viewed()) {
-			package->SetViewed();
+		if (canShareAnonymousUsageData && !PackageUtils::Viewed(package)) {
+			PackageLocalInfoRef localInfo = PackageUtils::NewLocalInfo(package);
+			localInfo->SetViewed();
+			package->SetLocalInfo(localInfo);
 			shouldIncrementViewCounter = true;
 		}
 	}
@@ -1241,12 +1241,16 @@ MainWindow::_PopulatePackageAsync(bool forcePopulate)
 
 	const char* packageNameStr = package->Name().String();
 
-	if (package->HasChangelog() && (forcePopulate || package->Changelog().IsEmpty())) {
-		_AddProcessCoordinator(
-			ProcessCoordinatorFactory::PopulatePkgChangelogCoordinator(&fModel, package));
-		HDINFO("pkg [%s] will have changelog updated from server.", packageNameStr);
-	} else {
-		HDDEBUG("pkg [%s] not have changelog updated from server.", packageNameStr);
+	PackageLocalizedTextRef localized = package->LocalizedText();
+
+	if (localized.IsSet()) {
+		if (localized->HasChangelog() && (forcePopulate || localized->Changelog().IsEmpty())) {
+			_AddProcessCoordinator(
+				ProcessCoordinatorFactory::PopulatePkgChangelogCoordinator(&fModel, package));
+			HDINFO("pkg [%s] will have changelog updated from server.", packageNameStr);
+		} else {
+			HDDEBUG("pkg [%s] not have changelog updated from server.", packageNameStr);
+		}
 	}
 
 	if (forcePopulate || RatingUtils::ShouldTryPopulateUserRatings(package->UserRatingInfo())) {
@@ -1366,7 +1370,7 @@ bool
 MainWindow::_SelectedPackageHasWebAppRepositoryCode()
 {
 	const PackageInfoRef& package = fPackageInfoView->Package();
-	const BString depotName = package->DepotName();
+	const BString depotName = PackageUtils::DepotName(package);
 
 	if (depotName.IsEmpty()) {
 		HDDEBUG("the package [%s] has no depot name", package->Name().String());
@@ -1699,4 +1703,21 @@ MainWindow::_HandleScreenshotCached(const BMessage* message)
 {
 	ScreenshotCoordinate coordinate(message);
 	fPackageInfoView->HandleScreenshotCached(coordinate);
+}
+
+
+/*static*/ const BString
+MainWindow::_WindowTitleForPackage(const PackageInfoRef& pkg)
+{
+	PackageVersionRef version = PackageUtils::Version(pkg);
+	BString versionString = "???";
+
+	if (version.IsSet())
+		versionString = version->ToString();
+
+	BString title = B_TRANSLATE("HaikuDepot - %PackageName% %PackageVersion%");
+	title.ReplaceAll("%PackageName%", pkg->Name());
+	title.ReplaceAll("%PackageVersion%", versionString);
+
+	return title;
 }
