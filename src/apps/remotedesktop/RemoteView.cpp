@@ -473,9 +473,10 @@ RemoteView::_DrawThread()
 				reply.Start(RP_UPDATE_DISPLAY_MODE);
 				reply.Add(bounds.IntegerWidth() + 1);
 				reply.Add(bounds.IntegerHeight() + 1);
-				if (reply.Flush() == B_OK)
+				if (reply.Flush() == B_OK) {
 					fIsConnected = true;
-
+					SetViewCursor(B_CURSOR_SYSTEM_DEFAULT);
+				}
 				continue;
 			}
 

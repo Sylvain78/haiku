@@ -75,7 +75,6 @@ static	int32						_DrawEntry(void *data);
 
 		BBitmap *					fOffscreenBitmap;
 		BView *						fOffscreen;
-
 		BCursor						fViewCursor;
 		BBitmap *					fCursorBitmap;
 		BRect						fCursorFrame;
