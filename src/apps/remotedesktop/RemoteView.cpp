@@ -475,7 +475,6 @@ RemoteView::_DrawThread()
 				reply.Add(bounds.IntegerHeight() + 1);
 				if (reply.Flush() == B_OK) {
 					fIsConnected = true;
-					SetViewCursor(B_CURSOR_SYSTEM_DEFAULT);
 				}
 				continue;
 			}
