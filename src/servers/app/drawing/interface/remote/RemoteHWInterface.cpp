@@ -258,6 +258,14 @@ RemoteHWInterface::_EventThread()
 				status_t result = reply.Flush();
 				(void)result;
 				TRACE("init connection result: %s\n", strerror(result));
+				reply.Start(RP_SET_CURSOR);
+				reply.AddCursor(CursorAndDragBitmap().Get());
+				result = reply.Flush();
+				TRACE("init connection set cursor result: %s\n", strerror(result));
+				reply.Start(RP_SET_CURSOR_VISIBLE);
+				reply.Add(fCursorVisible);
+				result = reply.Flush();
+				TRACE("init connection set cursor visible result: %s\n", strerror(result));
 				break;
 			}
 
