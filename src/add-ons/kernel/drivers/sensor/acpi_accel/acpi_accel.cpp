@@ -201,7 +201,7 @@ accel_notify_handler(acpi_handle device, uint32 value, void *context)
 
 		accel_driver_cookie* dev = (accel_driver_cookie*) context;
 		status = cmpc_get_accel_v4(dev, &x, &y, &z);
-		TRACE("notify->get status = %" B_PRIi32 "\n", status);
+		TRACE("x1=%" B_PRIi16 "y1=%" B_PRIi16 "z1=%" B_PRIi16 "\n", x, y, z);
 	}
 
 
@@ -242,7 +242,7 @@ acpi_accel_open(void *initCookie, const char *path, int flags, void** cookie)
 	return B_IO_ERROR;
 }
 
-static status_t
+	static status_t
 acpi_accel_close(void* cookie)
 {
 	return B_OK;//TODO acpi_SendCommand(device, 0x04, 0);
@@ -251,10 +251,9 @@ acpi_accel_close(void* cookie)
 	static status_t
 acpi_accel_read(void* _cookie, off_t position, void *buffer, size_t* numBytes)
 {
-TRACE("numBytes: %" B_PRIuSIZE "\n", *numBytes);
-if (*numBytes < 6)
+	TRACE("numBytes: %" B_PRIuSIZE "\n", *numBytes);
+	if (*numBytes < 6)
 		return B_IO_ERROR;
-TRACE("B\n");
 
 	accel_device_cookie *device = (accel_device_cookie*)_cookie;
 	int16_t x,y,z;
@@ -262,12 +261,10 @@ TRACE("B\n");
 	if (position == 0) {
 		char string[26];
 		acpi_status status = cmpc_get_accel_v4(device->driver_cookie, &x, &y, &z);
-TRACE("C\n");
 		if (status != B_OK)
 			return B_ERROR;
-TRACE("D\n");
-		snprintf(string, sizeof(string), "x=%" B_PRIu16 ", y=%" B_PRIu16 ", z=%" B_PRIu16 "\n", x, y, z);
-TRACE("E\n");
+		snprintf(string, sizeof(string), "x=%" B_PRIi16 ", y=%" B_PRIi16 ", z=%" B_PRIi16 "\n", x, y, z);
+		TRACE("x=%" B_PRIi16 ", y=%" B_PRIi16 ", z=%" B_PRIi16 "\n", x, y, z);
 		size_t max_len = user_strlcpy((char*)buffer, string, *numBytes);
 		if (max_len < B_OK)
 			return B_BAD_ADDRESS;
@@ -296,7 +293,7 @@ acpi_accel_control(void* _cookie, uint32 op, void* arg, size_t len)
 }
 
 
-static status_t
+	static status_t
 acpi_accel_free(void* cookie)
 {
 	accel_device_cookie* device = (accel_device_cookie*)cookie;
@@ -308,7 +305,7 @@ acpi_accel_free(void* cookie)
 //	#pragma mark - driver module API
 
 
-static float
+	static float
 acpi_accel_support(device_node *parent)
 {
 	// make sure parent is really the ACPI bus manager
@@ -322,15 +319,15 @@ acpi_accel_support(device_node *parent)
 	// check whether it's really a device
 	uint32 device_type;
 	if (sDeviceManager->get_attr_uint32(parent, ACPI_DEVICE_TYPE_ITEM,
-			&device_type, false) != B_OK
-		|| device_type != ACPI_TYPE_DEVICE) {
+				&device_type, false) != B_OK
+			|| device_type != ACPI_TYPE_DEVICE) {
 		return 0.0;
 	}
 
 	// check whether it's a accel device
 	const char *name;
 	if (sDeviceManager->get_attr_string(parent, ACPI_DEVICE_HID_ITEM, &name,
-		false) != B_OK || strcmp(name, ACPI_NAME_ACCEL)) {
+				false) != B_OK || strcmp(name, ACPI_NAME_ACCEL)) {
 		return 0.0;
 	}
 
@@ -338,7 +335,7 @@ acpi_accel_support(device_node *parent)
 }
 
 
-static status_t
+	static status_t
 acpi_accel_register_device(device_node *node)
 {
 	device_attr attrs[] = {
@@ -347,11 +344,11 @@ acpi_accel_register_device(device_node *node)
 	};
 
 	return sDeviceManager->register_node(node, ACPI_ACCEL_DRIVER_NAME, attrs,
-		NULL, NULL);
+			NULL, NULL);
 }
 
 
-static status_t
+	static status_t
 acpi_accel_init_driver(device_node *node, void **driverCookie)
 {
 	accel_driver_cookie *device;
@@ -366,12 +363,12 @@ acpi_accel_init_driver(device_node *node, void **driverCookie)
 	device_node *parent;
 	parent = sDeviceManager->get_parent_node(node);
 	sDeviceManager->get_driver(parent, (driver_module_info **)&device->acpi,
-		(void **)&device->acpi_cookie);
+			(void **)&device->acpi_cookie);
 
 #ifdef TRACE_ACCEL
 	const char* device_path;
 	if (sDeviceManager->get_attr_string(parent, ACPI_DEVICE_PATH_ITEM,
-		&device_path, false) == B_OK) {
+				&device_path, false) == B_OK) {
 		TRACE("acpi_accel_init_driver %s\n", device_path);
 	}
 #endif
@@ -389,26 +386,26 @@ acpi_accel_init_driver(device_node *node, void **driverCookie)
 
 	// install notify handler
 	device->acpi->install_notify_handler(device->acpi_cookie,
-		ACPI_ALL_NOTIFY, accel_notify_handler, device);
+			ACPI_ALL_NOTIFY, accel_notify_handler, device);
 
 	return B_OK;
 }
 
 
-static void
+	static void
 acpi_accel_uninit_driver(void *driverCookie)
 {
 	TRACE("acpi_accel_uninit_driver\n");
 	accel_driver_cookie *device = (accel_driver_cookie*)driverCookie;
 
 	device->acpi->remove_notify_handler(device->acpi_cookie,
-		ACPI_ALL_NOTIFY, accel_notify_handler);
+			ACPI_ALL_NOTIFY, accel_notify_handler);
 
 	free(device);
 }
 
 
-static status_t
+	static status_t
 acpi_accel_register_child_devices(void *cookie)
 {
 	accel_driver_cookie *device = (accel_driver_cookie*)cookie;
@@ -423,7 +420,7 @@ acpi_accel_register_child_devices(void *cookie)
 	snprintf(name, sizeof(name), ACPI_ACCEL_BASENAME, pathID);
 
 	return sDeviceManager->publish_device(device->node, name,
-		ACPI_ACCEL_DEVICE_NAME);
+			ACPI_ACCEL_DEVICE_NAME);
 }
 
 module_dependency module_dependencies[] = {
