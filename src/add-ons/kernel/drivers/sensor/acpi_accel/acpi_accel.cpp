@@ -37,7 +37,7 @@ struct cmpc_accel {
 
 struct accel_device_cookie {
 	accel_driver_cookie*	driver_cookie;
-	mutex			*mutex_accel;
+	mutex			mutex_accel;
 	struct cmpc_accel	*cmpc_accel;
 	int			x,y,z;
 };
@@ -174,10 +174,10 @@ accel_notify_handler(acpi_handle device, uint32 value, void *context)
 	if (value == 0x81) { 
 		accel_device_cookie* dev = (accel_device_cookie*) context;
 
-		mutex_lock(dev->mutex_accel);
+		mutex_lock(&dev->mutex_accel);
 			acpi_status status = cmpc_get_accel_v4(dev->driver_cookie, &x, &y, &z);
 			TRACE("x1=%" B_PRIi16 "y1=%" B_PRIi16 "z1=%" B_PRIi16 "\n", x, y, z);
-		mutex_unlock(dev->mutex_accel);
+		mutex_unlock(&dev->mutex_accel);
 
 		TRACE("cmpc_get_accel_v4 status=%u\n", status);
 	}
@@ -194,7 +194,7 @@ acpi_accel_init_device(void *driverCookie, void **cookie)
 	if (device == NULL)
 		return B_NO_MEMORY;
 
-	mutex_init(device->mutex_accel, "accel_mutex");
+	mutex_init(&device->mutex_accel, "accel_mutex");
 	accel = (struct cmpc_accel *)calloc(1, sizeof(cmpc_accel));
 	if (accel == NULL)
 		return B_NO_MEMORY;
