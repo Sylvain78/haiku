@@ -186,13 +186,35 @@ accel_notify_handler(acpi_handle device, uint32 value, void *context)
 static status_t
 acpi_accel_init_device(void *driverCookie, void **cookie)
 {
+	*cookie = driverCookie;
 
+	return B_OK;
+}
+
+static void
+acpi_accel_uninit_device(void *_cookie)
+{
+}
+
+static acpi_status cmpc_start_accel_v4(accel_driver_cookie *device) {
+	return acpi_SendCommand(device, 0x03, 0);
+}
+
+static acpi_status cmpc_stop_accel_v4(accel_driver_cookie *device) {
+	return acpi_SendCommand(device, 0x04, 0);
+}
+
+static status_t
+acpi_accel_open(void *initCookie, const char *path, int flags, void** cookie)
+{
 	accel_device_cookie *device;
 	struct cmpc_accel *accel;
 
 	device = (accel_device_cookie*)calloc(1, sizeof(accel_device_cookie));
 	if (device == NULL)
 		return B_NO_MEMORY;
+
+	device->driver_cookie = (accel_driver_cookie*)initCookie;
 
 	mutex_init(&device->mutex_accel, "accel_mutex");
 	accel = (struct cmpc_accel *)calloc(1, sizeof(cmpc_accel));
@@ -207,40 +229,9 @@ acpi_accel_init_device(void *driverCookie, void **cookie)
 	cmpc_accel_set_g_select_v4(device->driver_cookie, accel->g_select);
 
 	device->cmpc_accel = accel;
-	device->driver_cookie = (accel_driver_cookie*)driverCookie;
-
-	// install notify handler
-	device->driver_cookie->acpi->install_notify_handler(device->driver_cookie->acpi_cookie,
-		ACPI_ALL_NOTIFY, accel_notify_handler, device);
 
 	*cookie = device;
-
-	return B_OK;
-}
-
-static void
-acpi_accel_uninit_device(void *_cookie)
-{
-	accel_device_cookie *device = (accel_device_cookie*) _cookie;
-
-	// uninstall notify handler
-	device->driver_cookie->acpi->remove_notify_handler(device->driver_cookie->acpi_cookie,
-		ACPI_ALL_NOTIFY, accel_notify_handler);
-	//TODO : free objects ?
-}
-
-static acpi_status cmpc_start_accel_v4(accel_driver_cookie *device) {
-	return acpi_SendCommand(device, 0x03, 0);
-}
-
-static acpi_status cmpc_stop_accel_v4(accel_driver_cookie *device) {
-	return acpi_SendCommand(device, 0x04, 0);
-}
-
-static status_t
-acpi_accel_open(void *initCookie, const char *path, int flags, void** cookie)
-{
-	accel_device_cookie *device = (accel_device_cookie *) *cookie;
+	
 	if (cmpc_start_accel_v4(device->driver_cookie) == B_OK) {
 		return B_OK;
 	}
@@ -395,12 +386,18 @@ acpi_accel_init_driver(device_node *node, void **driverCookie)
 		return B_ERROR;
 	}
 
+	// install notify handler
+	device->acpi->install_notify_handler(device->acpi_cookie,
+		ACPI_ALL_NOTIFY, accel_notify_handler, device);
+
 	return B_OK;
 }
 
 static void
 acpi_accel_uninit_driver(void *driverCookie)
 {
+
+	//TODO : free objects in device?
 	TRACE("acpi_accel_uninit_driver\n");
 	accel_driver_cookie *device = (accel_driver_cookie*)driverCookie;
 
