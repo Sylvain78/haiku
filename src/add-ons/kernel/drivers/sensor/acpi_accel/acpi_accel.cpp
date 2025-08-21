@@ -176,7 +176,7 @@ accel_notify_handler(acpi_handle device, uint32 value, void *context)
 
 		mutex_lock(&dev->mutex_accel);
 			acpi_status status = cmpc_get_accel_v4(dev->driver_cookie, &x, &y, &z);
-			TRACE("x1=%" B_PRIi16 "y1=%" B_PRIi16 "z1=%" B_PRIi16 "\n", x, y, z);
+			TRACE("x1=%" B_PRIi16 " y1=%" B_PRIi16 " z1=%" B_PRIi16 "\n", x, y, z);
 		mutex_unlock(&dev->mutex_accel);
 
 		TRACE("cmpc_get_accel_v4 status=%u\n", status);
@@ -186,7 +186,31 @@ accel_notify_handler(acpi_handle device, uint32 value, void *context)
 static status_t
 acpi_accel_init_device(void *driverCookie, void **cookie)
 {
-	*cookie = driverCookie;
+	accel_device_cookie *device;
+	struct cmpc_accel *accel;
+
+	device = (accel_device_cookie*)calloc(1, sizeof(accel_device_cookie));
+	if (device == NULL)
+		return B_NO_MEMORY;
+
+	device->driver_cookie = (accel_driver_cookie*)driverCookie;
+
+	mutex_init(&device->mutex_accel, "accel_mutex");
+	accel = (struct cmpc_accel *)calloc(1, sizeof(cmpc_accel));
+	if (accel == NULL)
+		return B_NO_MEMORY;
+	
+	accel->sensitivity = CMPC_ACCEL_SENSITIVITY_DEFAULT;
+	accel->g_select = CMPC_ACCEL_G_SELECT_DEFAULT;
+
+	acpi_status status = cmpc_accel_set_sensitivity_v4(device->driver_cookie, accel->sensitivity);
+	TRACE("set_sensitivity status=%u\n", status);
+	cmpc_accel_set_g_select_v4(device->driver_cookie, accel->g_select);
+	TRACE("set_g_select status=%u\n", status);
+
+	device->cmpc_accel = accel;
+
+	*cookie = device;
 
 	return B_OK;
 }
@@ -207,31 +231,9 @@ static acpi_status cmpc_stop_accel_v4(accel_driver_cookie *device) {
 static status_t
 acpi_accel_open(void *initCookie, const char *path, int flags, void** cookie)
 {
-	accel_device_cookie *device;
-	struct cmpc_accel *accel;
-
-	device = (accel_device_cookie*)calloc(1, sizeof(accel_device_cookie));
-	if (device == NULL)
-		return B_NO_MEMORY;
-
-	device->driver_cookie = (accel_driver_cookie*)initCookie;
-
-	mutex_init(&device->mutex_accel, "accel_mutex");
-	accel = (struct cmpc_accel *)calloc(1, sizeof(cmpc_accel));
-	if (accel == NULL)
-		return B_NO_MEMORY;
-	
-	accel->sensitivity = CMPC_ACCEL_SENSITIVITY_DEFAULT;
-	accel->g_select = CMPC_ACCEL_G_SELECT_DEFAULT;
-
-	acpi_status status = cmpc_accel_set_sensitivity_v4(device->driver_cookie, accel->sensitivity);
-	TRACE("set_sensitivity status=%u\n", status);
-	cmpc_accel_set_g_select_v4(device->driver_cookie, accel->g_select);
-
-	device->cmpc_accel = accel;
-
+	accel_device_cookie *device = (accel_device_cookie *)initCookie;
 	*cookie = device;
-	
+
 	if (cmpc_start_accel_v4(device->driver_cookie) == B_OK) {
 		return B_OK;
 	}
