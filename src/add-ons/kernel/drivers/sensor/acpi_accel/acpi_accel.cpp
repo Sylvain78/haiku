@@ -337,29 +337,6 @@ acpi_accel_init_driver(device_node *node, void **driverCookie)
 
 	driver->node = node;
 
-	accel = (struct cmpc_accel *)calloc(1, sizeof(cmpc_accel));
-	if (accel == NULL)
-		return B_NO_MEMORY;
-	
-	accel->sensitivity = CMPC_ACCEL_SENSITIVITY_DEFAULT;
-	accel->g_select = CMPC_ACCEL_G_SELECT_DEFAULT;
-
-	status = cmpc_accel_set_sensitivity_v4(driver, accel->sensitivity);
-	TRACE("set_sensitivity status=%u\n", status);
-
-	status = cmpc_accel_set_g_select_v4(driver, accel->g_select);
-	TRACE("set_g_select status=%u\n", status);
-
-	driver->cmpc_accel = accel;
-
-	mutex_init(&driver->mutex_accel, "accel_mutex");
-	TRACE ("mutex_accel address = %p\n", &driver->mutex_accel);
-
-	//TODO atomic_add to opened_count at the device level. When it decreases to 0, remove_handler
-	// install notify handler
-	driver->acpi->install_notify_handler(driver->acpi_cookie,
-		ACPI_ALL_NOTIFY, accel_notify_handler, driver);
-
 	*driverCookie = driver;
 
 	device_node *parent;
@@ -385,6 +362,29 @@ acpi_accel_init_driver(device_node *node, void **driverCookie)
 		ERROR("acpi_accel_init_driver driver disabled\n");
 		return B_ERROR;
 	}
+
+	accel = (struct cmpc_accel *)calloc(1, sizeof(cmpc_accel));
+	if (accel == NULL)
+		return B_NO_MEMORY;
+	
+	accel->sensitivity = CMPC_ACCEL_SENSITIVITY_DEFAULT;
+	accel->g_select = CMPC_ACCEL_G_SELECT_DEFAULT;
+
+	status = cmpc_accel_set_sensitivity_v4(driver, accel->sensitivity);
+	TRACE("set_sensitivity status=%u\n", status);
+
+	status = cmpc_accel_set_g_select_v4(driver, accel->g_select);
+	TRACE("set_g_select status=%u\n", status);
+
+	driver->cmpc_accel = accel;
+
+	mutex_init(&driver->mutex_accel, "accel_mutex");
+	TRACE ("mutex_accel address = %p\n", &driver->mutex_accel);
+
+	//TODO atomic_add to opened_count at the device level. When it decreases to 0, remove_handler
+	// install notify handler
+	driver->acpi->install_notify_handler(driver->acpi_cookie,
+		ACPI_ALL_NOTIFY, accel_notify_handler, driver);
 
 	return B_OK;
 }
