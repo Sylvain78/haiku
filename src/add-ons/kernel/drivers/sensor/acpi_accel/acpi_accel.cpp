@@ -184,6 +184,7 @@ acpi_accel_init_device(void *driverCookie, void **cookie)
 {
 	accel_driver_cookie *driver = (accel_driver_cookie *)driverCookie;
 	*cookie = driver;
+	TRACE("init_device , driverCookie = %p *cookie= %p\n", driverCookie, *cookie);
 
 	return B_OK;
 }
@@ -206,7 +207,7 @@ acpi_accel_open(void *initCookie, const char *path, int flags, void** cookie)
 {
 	accel_driver_cookie *driver = (accel_driver_cookie *)initCookie;
 	*cookie = driver;
-
+	TRACE("open , initCookie = %p\n", initCookie);
 	if (cmpc_start_accel_v4(driver) == B_OK) {
 		return B_OK;
 	}
