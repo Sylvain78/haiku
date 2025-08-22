@@ -187,15 +187,18 @@ static status_t
 acpi_accel_init_device(void *driverCookie, void **cookie)
 {
 	accel_device_cookie *device;
+	accel_driver_cookie *driver;
 	struct cmpc_accel *accel;
+	acpi_status status;
 
+	driver = (accel_driver_cookie*)driverCookie;
+	
 	device = (accel_device_cookie*)calloc(1, sizeof(accel_device_cookie));
 	if (device == NULL)
 		return B_NO_MEMORY;
 
-	device->driver_cookie = (accel_driver_cookie*)driverCookie;
+	device->driver_cookie = driver;
 
-	mutex_init(&device->mutex_accel, "accel_mutex");
 	accel = (struct cmpc_accel *)calloc(1, sizeof(cmpc_accel));
 	if (accel == NULL)
 		return B_NO_MEMORY;
@@ -203,14 +206,21 @@ acpi_accel_init_device(void *driverCookie, void **cookie)
 	accel->sensitivity = CMPC_ACCEL_SENSITIVITY_DEFAULT;
 	accel->g_select = CMPC_ACCEL_G_SELECT_DEFAULT;
 
-	acpi_status status = cmpc_accel_set_sensitivity_v4(device->driver_cookie, accel->sensitivity);
+	status = cmpc_accel_set_sensitivity_v4(device->driver_cookie, accel->sensitivity);
 	TRACE("set_sensitivity status=%u\n", status);
-	cmpc_accel_set_g_select_v4(device->driver_cookie, accel->g_select);
+
+	status = cmpc_accel_set_g_select_v4(device->driver_cookie, accel->g_select);
 	TRACE("set_g_select status=%u\n", status);
 
 	device->cmpc_accel = accel;
 
+	mutex_init(&device->mutex_accel, "accel_mutex");
+
 	*cookie = device;
+	//TODO atomic_add to opened_count at the device level. When it decreases to 0, remove_handler
+	// install notify handler
+	driver->acpi->install_notify_handler(driver->acpi_cookie,
+		ACPI_ALL_NOTIFY, accel_notify_handler, device);
 
 	return B_OK;
 }
@@ -355,19 +365,19 @@ acpi_accel_register_device(device_node *node)
 static status_t
 acpi_accel_init_driver(device_node *node, void **driverCookie)
 {
-	accel_driver_cookie *device;
-	device = (accel_driver_cookie *)calloc(1, sizeof(accel_driver_cookie));
-	if (device == NULL)
+	accel_driver_cookie *driver;
+	driver = (accel_driver_cookie *)calloc(1, sizeof(accel_driver_cookie));
+	if (driver == NULL)
 		return B_NO_MEMORY;
 
-	*driverCookie = device;
+	*driverCookie = driver;
 
-	device->node = node;
+	driver->node = node;
 
 	device_node *parent;
 	parent = sDeviceManager->get_parent_node(node);
-	sDeviceManager->get_driver(parent, (driver_module_info **)&device->acpi,
-			(void **)&device->acpi_cookie);
+	sDeviceManager->get_driver(parent, (driver_module_info **)&driver->acpi,
+			(void **)&driver->acpi_cookie);
 
 #ifdef TRACE_ACCEL
 	const char* device_path;
@@ -380,17 +390,13 @@ acpi_accel_init_driver(device_node *node, void **driverCookie)
 	sDeviceManager->put_node(parent);
 
 	uint64 sta;
-	status_t status = acpi_GetInteger(device, "_STA", &sta);
+	status_t status = acpi_GetInteger(driver, "_STA", &sta);
 	uint64 mask = ACPI_STA_DEVICE_PRESENT | ACPI_STA_DEVICE_ENABLED
 		| ACPI_STA_DEVICE_FUNCTIONING;
 	if (status == B_OK && (sta & mask) != mask) {
-		ERROR("acpi_accel_init_driver device disabled\n");
+		ERROR("acpi_accel_init_driver driver disabled\n");
 		return B_ERROR;
 	}
-
-	// install notify handler
-	device->acpi->install_notify_handler(device->acpi_cookie,
-		ACPI_ALL_NOTIFY, accel_notify_handler, device);
 
 	return B_OK;
 }
