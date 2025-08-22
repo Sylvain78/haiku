@@ -24,19 +24,15 @@ extern "C" {
 #define CMPC_ACCEL_SENSITIVITY_DEFAULT		5
 #define CMPC_ACCEL_G_SELECT_DEFAULT		0
 
-struct accel_driver_cookie {
-	device_node*			node;
-	acpi_device_module_info*	acpi;
-	acpi_device			acpi_cookie;
-};
-
 struct cmpc_accel {
 	int	sensitivity;
 	int	g_select;
 };
 
-struct accel_device_cookie {
-	accel_driver_cookie*	driver_cookie;
+struct accel_driver_cookie {
+	device_node*			node;
+	acpi_device_module_info*	acpi;
+	acpi_device			acpi_cookie;
 	mutex			mutex_accel;
 	struct cmpc_accel	*cmpc_accel;
 	int			x,y,z;
@@ -67,7 +63,7 @@ static ConditionVariable sACCELCondition;
 
 
 static status_t
-acpi_GetInteger(accel_driver_cookie *device,
+acpi_GetInteger(accel_driver_cookie *driver,
 	const char* path, uint64* number)
 {
 	acpi_data buf;
@@ -77,7 +73,7 @@ acpi_GetInteger(accel_driver_cookie *device,
 
 	// Assume that what we've been pointed at is an Integer object, or
 	// a method that will return an Integer.
-	status_t status = device->acpi->evaluate_method(device->acpi_cookie, path,
+	status_t status = driver->acpi->evaluate_method(driver->acpi_cookie, path,
 		NULL, &buf);
 	if (status == B_OK) {
 		if (object.object_type == ACPI_TYPE_INTEGER)
@@ -88,7 +84,7 @@ acpi_GetInteger(accel_driver_cookie *device,
 	return status;
 }
 
-static acpi_status acpi_SendCommand(accel_driver_cookie *device, int command, int val) {
+static acpi_status acpi_SendCommand(accel_driver_cookie *driver, int command, int val) {
 	acpi_object_type array[4];
 	acpi_objects acpi_objects;
 	acpi_objects.count = 4;
@@ -106,23 +102,23 @@ static acpi_status acpi_SendCommand(accel_driver_cookie *device, int command, in
 	array[3].object_type = ACPI_TYPE_INTEGER;
 	array[3].integer.integer = 0;
 
-	return device->acpi->evaluate_method(device->acpi_cookie, "ACMD", &acpi_objects, NULL);
+	return driver->acpi->evaluate_method(driver->acpi_cookie, "ACMD", &acpi_objects, NULL);
 }
 
 
 //	#pragma mark - device module API
 
-static acpi_status cmpc_accel_set_sensitivity_v4(accel_driver_cookie *device, int val)
+static acpi_status cmpc_accel_set_sensitivity_v4(accel_driver_cookie *driver, int val)
 {
-	return acpi_SendCommand(device, 0x02, val);
+	return acpi_SendCommand(driver, 0x02, val);
 }
 
-static acpi_status cmpc_accel_set_g_select_v4(accel_driver_cookie *device, int val)
+static acpi_status cmpc_accel_set_g_select_v4(accel_driver_cookie *driver, int val)
 {
-	return acpi_SendCommand(device, 0x05, val);
+	return acpi_SendCommand(driver, 0x05, val);
 }
 
-static acpi_status cmpc_get_accel_v4(accel_driver_cookie *device,
+static acpi_status cmpc_get_accel_v4(accel_driver_cookie *driver,
 		int16_t *x,
 		int16_t *y,
 		int16_t *z)
@@ -143,7 +139,7 @@ static acpi_status cmpc_get_accel_v4(accel_driver_cookie *device,
 	array[2].integer.integer = 0;
 	array[3].object_type = ACPI_TYPE_INTEGER;
 	array[3].integer.integer = 0;
-	status = device->acpi->evaluate_method(device->acpi_cookie, "ACMD",  &input, &output);
+	status = driver->acpi->evaluate_method(driver->acpi_cookie, "ACMD",  &input, &output);
 	TRACE ("Z: %" B_PRIi32 "\n", status);
 	if (status == B_OK) {
 	TRACE ("ZOK\n");
@@ -172,10 +168,10 @@ accel_notify_handler(acpi_handle device, uint32 value, void *context)
 	TRACE("accel_notify_handler event 0x%" B_PRIx32 "\n", value);
 
 	if (value == 0x81) { 
-		accel_device_cookie* dev = (accel_device_cookie*) context;
+		accel_driver_cookie* dev = (accel_driver_cookie*) context;
 
 		mutex_lock(&dev->mutex_accel);
-			acpi_status status = cmpc_get_accel_v4(dev->driver_cookie, &x, &y, &z);
+			acpi_status status = cmpc_get_accel_v4(dev, &x, &y, &z);
 			TRACE("x1=%" B_PRIi16 " y1=%" B_PRIi16 " z1=%" B_PRIi16 "\n", x, y, z);
 		mutex_unlock(&dev->mutex_accel);
 
@@ -186,42 +182,7 @@ accel_notify_handler(acpi_handle device, uint32 value, void *context)
 static status_t
 acpi_accel_init_device(void *driverCookie, void **cookie)
 {
-	accel_device_cookie *device;
-	accel_driver_cookie *driver;
-	struct cmpc_accel *accel;
-	acpi_status status;
-
-	driver = (accel_driver_cookie*)driverCookie;
-	
-	device = (accel_device_cookie*)calloc(1, sizeof(accel_device_cookie));
-	if (device == NULL)
-		return B_NO_MEMORY;
-
-	device->driver_cookie = driver;
-
-	accel = (struct cmpc_accel *)calloc(1, sizeof(cmpc_accel));
-	if (accel == NULL)
-		return B_NO_MEMORY;
-	
-	accel->sensitivity = CMPC_ACCEL_SENSITIVITY_DEFAULT;
-	accel->g_select = CMPC_ACCEL_G_SELECT_DEFAULT;
-
-	status = cmpc_accel_set_sensitivity_v4(device->driver_cookie, accel->sensitivity);
-	TRACE("set_sensitivity status=%u\n", status);
-
-	status = cmpc_accel_set_g_select_v4(device->driver_cookie, accel->g_select);
-	TRACE("set_g_select status=%u\n", status);
-
-	device->cmpc_accel = accel;
-
-	mutex_init(&device->mutex_accel, "accel_mutex");
-	TRACE ("mutex_accel address = %p\n", &device->mutex_accel);
-
-	*cookie = device;
-	//TODO atomic_add to opened_count at the device level. When it decreases to 0, remove_handler
-	// install notify handler
-	driver->acpi->install_notify_handler(driver->acpi_cookie,
-		ACPI_ALL_NOTIFY, accel_notify_handler, device);
+	*cookie = driverCookie;
 
 	return B_OK;
 }
@@ -231,21 +192,21 @@ acpi_accel_uninit_device(void *_cookie)
 {
 }
 
-static acpi_status cmpc_start_accel_v4(accel_driver_cookie *device) {
-	return acpi_SendCommand(device, 0x03, 0);
+static acpi_status cmpc_start_accel_v4(accel_driver_cookie *driver) {
+	return acpi_SendCommand(driver, 0x03, 0);
 }
 
-static acpi_status cmpc_stop_accel_v4(accel_driver_cookie *device) {
-	return acpi_SendCommand(device, 0x04, 0);
+static acpi_status cmpc_stop_accel_v4(accel_driver_cookie *driver) {
+	return acpi_SendCommand(driver, 0x04, 0);
 }
 
 static status_t
 acpi_accel_open(void *initCookie, const char *path, int flags, void** cookie)
 {
-	accel_device_cookie *device = (accel_device_cookie *)initCookie;
-	*cookie = device;
+	accel_driver_cookie *driver = (accel_driver_cookie *)initCookie;
+	*cookie = driver;
 
-	if (cmpc_start_accel_v4(device->driver_cookie) == B_OK) {
+	if (cmpc_start_accel_v4(driver) == B_OK) {
 		return B_OK;
 	}
 
@@ -255,8 +216,8 @@ acpi_accel_open(void *initCookie, const char *path, int flags, void** cookie)
 static status_t
 acpi_accel_close(void* cookie)
 {
-	accel_device_cookie *device = (accel_device_cookie *) cookie;
-	if (cmpc_stop_accel_v4(device->driver_cookie) == B_OK) {
+	accel_driver_cookie *driver = (accel_driver_cookie *) cookie;
+	if (cmpc_stop_accel_v4(driver) == B_OK) {
 		return B_OK;
 	}
 
@@ -270,12 +231,12 @@ acpi_accel_read(void* _cookie, off_t position, void *buffer, size_t* numBytes)
 	if (*numBytes < 6)
 		return B_IO_ERROR;
 
-	accel_device_cookie *device = (accel_device_cookie*)_cookie;
+	accel_driver_cookie *driver = (accel_driver_cookie*)_cookie;
 	int16_t x,y,z;
 
 	if (position == 0) {
 		char string[26];
-		acpi_status status = cmpc_get_accel_v4(device->driver_cookie, &x, &y, &z);
+		acpi_status status = cmpc_get_accel_v4(driver, &x, &y, &z);
 		if (status != B_OK)
 			return B_ERROR;
 		snprintf(string, sizeof(string), "x=%" B_PRIi16 ", y=%" B_PRIi16 ", z=%" B_PRIi16 "\n", x, y, z);
@@ -302,7 +263,7 @@ acpi_accel_write(void* cookie, off_t position, const void* buffer,
 static status_t
 acpi_accel_control(void* _cookie, uint32 op, void* arg, size_t len)
 {
-	//accel_device_cookie* device = (accel_device_cookie*)_cookie;
+	//accel_driver_cookie* device = (accel_driver_cookie*)_cookie;
 
 	return B_DEV_INVALID_IOCTL;
 }
@@ -311,7 +272,7 @@ acpi_accel_control(void* _cookie, uint32 op, void* arg, size_t len)
 static status_t
 acpi_accel_free(void* cookie)
 {
-	accel_device_cookie* device = (accel_device_cookie*)cookie;
+	accel_driver_cookie* device = (accel_driver_cookie*)cookie;
 	free(device);
 	return B_OK;
 }
@@ -367,13 +328,39 @@ static status_t
 acpi_accel_init_driver(device_node *node, void **driverCookie)
 {
 	accel_driver_cookie *driver;
+	cmpc_accel *accel;
+	status_t status;
+
 	driver = (accel_driver_cookie *)calloc(1, sizeof(accel_driver_cookie));
 	if (driver == NULL)
 		return B_NO_MEMORY;
 
-	*driverCookie = driver;
-
 	driver->node = node;
+
+	accel = (struct cmpc_accel *)calloc(1, sizeof(cmpc_accel));
+	if (accel == NULL)
+		return B_NO_MEMORY;
+	
+	accel->sensitivity = CMPC_ACCEL_SENSITIVITY_DEFAULT;
+	accel->g_select = CMPC_ACCEL_G_SELECT_DEFAULT;
+
+	status = cmpc_accel_set_sensitivity_v4(driver, accel->sensitivity);
+	TRACE("set_sensitivity status=%u\n", status);
+
+	status = cmpc_accel_set_g_select_v4(driver, accel->g_select);
+	TRACE("set_g_select status=%u\n", status);
+
+	driver->cmpc_accel = accel;
+
+	mutex_init(&driver->mutex_accel, "accel_mutex");
+	TRACE ("mutex_accel address = %p\n", &driver->mutex_accel);
+
+	//TODO atomic_add to opened_count at the device level. When it decreases to 0, remove_handler
+	// install notify handler
+	driver->acpi->install_notify_handler(driver->acpi_cookie,
+		ACPI_ALL_NOTIFY, accel_notify_handler, driver);
+
+	*driverCookie = driver;
 
 	device_node *parent;
 	parent = sDeviceManager->get_parent_node(node);
@@ -391,7 +378,7 @@ acpi_accel_init_driver(device_node *node, void **driverCookie)
 	sDeviceManager->put_node(parent);
 
 	uint64 sta;
-	status_t status = acpi_GetInteger(driver, "_STA", &sta);
+	status = acpi_GetInteger(driver, "_STA", &sta);
 	uint64 mask = ACPI_STA_DEVICE_PRESENT | ACPI_STA_DEVICE_ENABLED
 		| ACPI_STA_DEVICE_FUNCTIONING;
 	if (status == B_OK && (sta & mask) != mask) {
@@ -408,18 +395,18 @@ acpi_accel_uninit_driver(void *driverCookie)
 
 	//TODO : free objects in device?
 	TRACE("acpi_accel_uninit_driver\n");
-	accel_driver_cookie *device = (accel_driver_cookie*)driverCookie;
+	accel_driver_cookie *driver = (accel_driver_cookie*)driverCookie;
 
-	device->acpi->remove_notify_handler(device->acpi_cookie,
+	driver->acpi->remove_notify_handler(driver->acpi_cookie,
 			ACPI_ALL_NOTIFY, accel_notify_handler);
 
-	free(device);
+	free(driver);
 }
 
 static status_t
 acpi_accel_register_child_devices(void *cookie)
 {
-	accel_driver_cookie *device = (accel_driver_cookie*)cookie;
+	accel_driver_cookie *driver = (accel_driver_cookie*)cookie;
 
 	int pathID = sDeviceManager->create_id(ACPI_ACCEL_PATHID_GENERATOR);
 	if (pathID < 0) {
@@ -430,7 +417,7 @@ acpi_accel_register_child_devices(void *cookie)
 	char name[128];
 	snprintf(name, sizeof(name), ACPI_ACCEL_BASENAME, pathID);
 
-	return sDeviceManager->publish_device(device->node, name,
+	return sDeviceManager->publish_device(driver->node, name,
 			ACPI_ACCEL_DEVICE_NAME);
 }
 
