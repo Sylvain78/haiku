@@ -215,6 +215,7 @@ acpi_accel_init_device(void *driverCookie, void **cookie)
 	device->cmpc_accel = accel;
 
 	mutex_init(&device->mutex_accel, "accel_mutex");
+	TRACE ("mutex_accel address = %p\n", &device->mutex_accel);
 
 	*cookie = device;
 	//TODO atomic_add to opened_count at the device level. When it decreases to 0, remove_handler
