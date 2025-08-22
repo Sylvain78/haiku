@@ -182,7 +182,8 @@ accel_notify_handler(acpi_handle device, uint32 value, void *context)
 static status_t
 acpi_accel_init_device(void *driverCookie, void **cookie)
 {
-	*cookie = driverCookie;
+	accel_driver_cookie *driver = (accel_driver_cookie *)driverCookie;
+	*cookie = driver;
 
 	return B_OK;
 }
@@ -337,8 +338,6 @@ acpi_accel_init_driver(device_node *node, void **driverCookie)
 
 	driver->node = node;
 
-	*driverCookie = driver;
-
 	device_node *parent;
 	parent = sDeviceManager->get_parent_node(node);
 	sDeviceManager->get_driver(parent, (driver_module_info **)&driver->acpi,
@@ -385,6 +384,8 @@ acpi_accel_init_driver(device_node *node, void **driverCookie)
 	// install notify handler
 	driver->acpi->install_notify_handler(driver->acpi_cookie,
 		ACPI_ALL_NOTIFY, accel_notify_handler, driver);
+
+	*driverCookie = driver;
 
 	return B_OK;
 }
