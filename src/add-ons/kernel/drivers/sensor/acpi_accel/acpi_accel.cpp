@@ -275,6 +275,7 @@ static status_t
 acpi_accel_free(void* cookie)
 {
 	accel_driver_cookie* device = (accel_driver_cookie*)cookie;
+	TRACE("accel_free %p\n", device);
 	free(device);
 	return B_OK;
 }
