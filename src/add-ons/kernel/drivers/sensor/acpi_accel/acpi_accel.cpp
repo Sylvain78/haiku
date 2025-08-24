@@ -170,10 +170,10 @@ accel_notify_handler(acpi_handle device, uint32 value, void *context)
 	if (value == 0x81) { 
 		accel_driver_cookie* dev = (accel_driver_cookie*) context;
 
-		mutex_lock(&dev->mutex_accel);
+		//mutex_lock(&dev->mutex_accel);
 			acpi_status status = cmpc_get_accel_v4(dev, &x, &y, &z);
 			TRACE("x1=%" B_PRIi16 " y1=%" B_PRIi16 " z1=%" B_PRIi16 "\n", x, y, z);
-		mutex_unlock(&dev->mutex_accel);
+		//mutex_unlock(&dev->mutex_accel);
 
 		TRACE("cmpc_get_accel_v4 status=%u\n", status);
 	}
@@ -239,8 +239,10 @@ acpi_accel_read(void* _cookie, off_t position, void *buffer, size_t* numBytes)
 	if (position == 0) {
 		char string[26];
 		acpi_status status = cmpc_get_accel_v4(driver, &x, &y, &z);
-		if (status != B_OK)
+		if (status != B_OK) {
+			TRACE("read error");
 			return B_ERROR;
+		}
 		snprintf(string, sizeof(string), "x=%" B_PRIi16 ", y=%" B_PRIi16 ", z=%" B_PRIi16 "\n", x, y, z);
 		TRACE("x=%" B_PRIi16 ", y=%" B_PRIi16 ", z=%" B_PRIi16 "\n", x, y, z);
 		size_t max_len = user_strlcpy((char*)buffer, string, *numBytes);
