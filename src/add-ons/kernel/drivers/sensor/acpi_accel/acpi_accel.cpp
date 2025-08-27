@@ -140,11 +140,11 @@ static acpi_status cmpc_get_accel_v4(accel_driver_cookie *driver,
 	array[3].object_type = ACPI_TYPE_INTEGER;
 	array[3].integer.integer = 0;
 	status = driver->acpi->evaluate_method(driver->acpi_cookie, "ACMD",  &input, &output);
-	TRACE ("Z: %" B_PRIi32 "\n", status);
 	if (status == B_OK) {
-	TRACE ("ZOK\n");
-		acpi_object_type* object = (acpi_object_type*)output.pointer;
+		acpi_object_type* object = (acpi_object_type *)output.pointer;
 		locs = (int16_t *)object->buffer.buffer;
+		/*acpi_object_type* object = (acpi_object_type*)output.pointer;
+		locs = (int16_t *)object->buffer.buffer;*/
 		*x = locs[0];
 		*y = locs[1];
 		*z = locs[2];
@@ -165,8 +165,6 @@ void
 accel_notify_handler(acpi_handle device, uint32 value, void *context)
 {
 	int16_t x, y, z;
-	TRACE("accel_notify_handler event 0x%" B_PRIx32 "\n", value);
-
 	if (value == 0x81) { 
 		accel_driver_cookie* dev = (accel_driver_cookie*) context;
 
@@ -175,7 +173,6 @@ accel_notify_handler(acpi_handle device, uint32 value, void *context)
 			TRACE("x1=%" B_PRIi16 " y1=%" B_PRIi16 " z1=%" B_PRIi16 "\n", x, y, z);
 		//mutex_unlock(&dev->mutex_accel);
 
-		TRACE("cmpc_get_accel_v4 status=%u\n", status);
 	}
 }
 
@@ -195,7 +192,9 @@ acpi_accel_uninit_device(void *_cookie)
 }
 
 static acpi_status cmpc_start_accel_v4(accel_driver_cookie *driver) {
-	return acpi_SendCommand(driver, 0x03, 0);
+	status_t status = acpi_SendCommand(driver, 0x03, 0);
+	TRACE ("start status 0x%x\n", status);
+	return status; 
 }
 
 static acpi_status cmpc_stop_accel_v4(accel_driver_cookie *driver) {
@@ -206,11 +205,21 @@ static status_t
 acpi_accel_open(void *initCookie, const char *path, int flags, void** cookie)
 {
 	accel_driver_cookie *driver = (accel_driver_cookie *)initCookie;
+	cmpc_accel *accel = driver->cmpc_accel;
+	status_t status;
+
 	*cookie = driver;
-	TRACE("open , initCookie = %p\n", initCookie);
+
+	status = cmpc_accel_set_sensitivity_v4(driver, accel->sensitivity);
+	TRACE("open set_sensitivity status=%u\n", status);
+
+	status = cmpc_accel_set_g_select_v4(driver, accel->g_select);
+	TRACE("open set_g_select status=%u\n", status);
 	if (cmpc_start_accel_v4(driver) == B_OK) {
+	TRACE("open OK\n");
 		return B_OK;
 	}
+	TRACE("open KO\n");
 
 	return B_IO_ERROR;
 }
@@ -218,10 +227,13 @@ acpi_accel_open(void *initCookie, const char *path, int flags, void** cookie)
 static status_t
 acpi_accel_close(void* cookie)
 {
+	TRACE("close\n");
 	accel_driver_cookie *driver = (accel_driver_cookie *) cookie;
 	if (cmpc_stop_accel_v4(driver) == B_OK) {
+	TRACE("close OK\n");
 		return B_OK;
 	}
+	TRACE("close KO\n");
 
 	return B_IO_ERROR;
 }
