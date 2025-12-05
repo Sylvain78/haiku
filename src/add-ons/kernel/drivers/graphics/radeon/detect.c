@@ -78,6 +78,9 @@
 #define DEVICE_ID_RADEON_5c61   0x5c61
 #define DEVICE_ID_RADEON_5c63   0x5c63 // new
 
+// RV280 (Secondary)
+#define DEVICE_ID_RADEON_5d44  0x5d44
+
 // r300
 #define DEVICE_ID_RADEON_ND     0x4e44
 #define DEVICE_ID_RADEON_NE     0x4e45
@@ -311,6 +314,9 @@ RadeonDevice radeon_device_list[] = {
 	// M9+ (based on rv280) was rt_m9plus
 	{ DEVICE_ID_RADEON_5c61, rt_rv280, ISMOBILITY, "Radeon Mobility 9200" },
 	{ DEVICE_ID_RADEON_5c63, rt_rv280, ISMOBILITY, "Radeon Mobility 9200" },
+
+	// RV280 (secondary)
+	{ DEVICE_ID_RADEON_5d44, rt_rv280, STD_RADEON, "Radeon 9200 SE (Secondary)" },
 
 	// R300
 	{ DEVICE_ID_RADEON_ND, rt_r300, STD_RADEON, "Radeon 9700 ND" },
